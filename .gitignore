@@ -1,0 +1,16 @@
+# Rust build artifacts
+/target
+
+# macOS
+.DS_Store
+
+# Python / maturin
+.venv/
+__pycache__/
+*.so
+*.pyd
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/

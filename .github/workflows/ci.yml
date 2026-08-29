@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Example
+        run: cargo run --release --example price_options
+
+  python:
+    name: python bindings / build ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The bindings broke once because the local interpreter outran the
+        # pinned PyO3. Building at both ends of the supported range catches
+        # that before it reaches a user.
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build and install the extension
+        run: maturin develop --release
+
+      - name: Smoke-test the Python API
+        run: python tests/test_bindings.py
+
+  abi3:
+    # The extension is built with `abi3-py39`, so one wheel must load on
+    # every CPython from 3.9 up. Build once, then import it from a set of
+    # interpreters that never saw the compiler - that is the whole claim,
+    # and nothing else in the suite tests it.
+    name: abi3 wheel loads everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the wheel once
+        run: |
+          pip install maturin
+          maturin build --release --out dist
+          ls -l dist/
+          # Fail loudly if the abi3 feature silently stopped applying.
+          ls dist/ | grep -q 'cp39-abi3' || {
+            echo "::error::wheel is not tagged cp39-abi3 - abi3 build is broken"
+            exit 1
+          }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.9
+            3.10
+            3.11
+            3.12
+            3.13
+
+      - name: Import the same wheel from every interpreter
+        run: |
+          set -e
+          for v in 3.9 3.10 3.11 3.12 3.13; do
+            echo "--- CPython $v ---"
+            python$v -m pip install --quiet --force-reinstall dist/*.whl
+            python$v -m pip install --quiet numpy
+            python$v tests/test_bindings.py
+          done

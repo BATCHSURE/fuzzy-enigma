@@ -1,0 +1,10 @@
+# PyO3 with `extension-module` does not link libpython directly: symbols
+# are resolved at runtime by the embedding interpreter. On macOS the
+# linker needs to be told this explicitly. Maturin sets these flags via
+# its own build path; this config only affects raw `cargo build` runs
+# performed by developers verifying the bindings without maturin.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-undefined,dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-undefined,dynamic_lookup"]
