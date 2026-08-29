@@ -54,14 +54,21 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install maturin
-        run: pip install maturin
-
+      # `maturin develop` installs into an *active* virtualenv and refuses
+      # to run without one, so create it explicitly. This mirrors the exact
+      # sequence the README tells contributors to run, which means this job
+      # validates those instructions rather than some CI-only shortcut.
       - name: Build and install the extension
-        run: maturin develop --release
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip maturin
+          maturin develop --release
 
       - name: Smoke-test the Python API
-        run: python tests/test_bindings.py
+        run: |
+          . .venv/bin/activate
+          python tests/test_bindings.py
 
   abi3:
     # The extension is built with `abi3-py39`, so one wheel must load on
@@ -104,6 +111,5 @@ jobs:
           for v in 3.9 3.10 3.11 3.12 3.13; do
             echo "--- CPython $v ---"
             python$v -m pip install --quiet --force-reinstall dist/*.whl
-            python$v -m pip install --quiet numpy
             python$v tests/test_bindings.py
           done
