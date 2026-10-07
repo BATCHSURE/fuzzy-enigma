@@ -5,10 +5,20 @@ The library focuses on a small, sharp set of pieces that compose cleanly:
 a path-generating model, a payoff trait, and a Monte Carlo engine that knows
 about neither finance nor probability theory.
 
+The staged expansion plan and exact teaching contract terms live in
+[docs/ROADMAP.md](docs/ROADMAP.md). New worked examples cover
+[structured notes](notebooks/structured_notes.ipynb),
+[numerical methods](notebooks/numerical_methods.ipynb), and
+[Heston](notebooks/heston.ipynb). Optional SPXW market validation, offline
+snapshot replay, and independent Heston calibration are documented in
+[docs/MARKET_VALIDATION.md](docs/MARKET_VALIDATION.md).
+
 ## Features
 
 - **Geometric Brownian Motion** under the risk-neutral measure, simulated
   exactly with the log-Euler scheme.
+- **Heston stochastic volatility** with log-Euler stock dynamics and
+  full-truncation Euler variance, using two noise factors per step.
 - **Path-dependent payoffs** out of the box:
   - European (sanity check vs. Black-Scholes)
   - Arithmetic-average **Asian**
@@ -18,9 +28,14 @@ about neither finance nor probability theory.
   - **Cliquet / ratchet** with local cap & floor and global cap & floor
   - **Autocallable note** with discrete observation dates and a downside
     protection barrier
+  - **Snowball** with historical discrete knock-in and scheduled knock-out
+  - **Phoenix** with independent coupon/autocall dates and optional coupon memory
+  - **Scheduled Asian** with a fixing schedule independent of the simulation grid
 - **Variance reduction** via antithetic variates and **control variates**
-  (the Black-Scholes European makes a ready-made control for any
-  single-asset exotic).
+  (the Black-Scholes European makes a ready-made control for
+  single-asset GBM exotics).
+- **Geometric Asian control** with an exact discrete-fixing GBM expectation,
+  and **continuous GBM single barriers** with Brownian bridge weighting.
 - **Greeks** by bump-and-revalue under common random numbers.
 - **Parallel evaluation** via [`rayon`](https://crates.io/crates/rayon).
 - **Reproducible** results: path `i` draws from ChaCha20 *stream* `i` under
@@ -30,9 +45,9 @@ about neither finance nor probability theory.
 - **Closed-form Black-Scholes** prices and Greeks in
   [`analytic`](src/analytic.rs), used for cross-checks and as the
   expectation behind the control variate.
-- Pluggable: implement [`PathGenerator`](src/model.rs) for your own model
-  (Heston, local-vol, jump-diffusion, multi-asset basket) and the engine
-  and every payoff keep working unchanged.
+- Pluggable single-asset models: implement [`PathGenerator`](src/model.rs),
+  overriding `noise_dim()` for multiple stochastic factors. Paths remain
+  one price per time point; multi-asset products need a separate path interface.
 
 ## Quick start
 
@@ -104,10 +119,10 @@ Three traits, one job each:
 
 | trait | role | implementations |
 |---|---|---|
-| `PathGenerator` | turn standard-normal increments into one asset path | `GbmModel` |
-| `Payoff` | turn a path into a present-value cashflow | `EuropeanOption`, `AsianOption`, `BarrierOption`, `LookbackOption`, `CliquetOption`, `AutocallableNote` |
+| `PathGenerator` | turn standard-normal increments into one asset path | `GbmModel`, `HestonModel` |
+| `Payoff` | turn a path into a present-value cashflow | European, Asian, scheduled Asian, barrier, lookback, cliquet, autocallable, snowball, Phoenix |
 | `McEngine` | draw noise, drive the model, average payoffs | (one struct, configurable) |
-| `ControlVariate` | a correlated quantity whose mean is known in closed form | `EuropeanControl` |
+| `ControlVariate` | a correlated quantity whose mean is known in closed form | `EuropeanControl`, `GeometricAsianControl` (GBM) |
 
 Because the noise lives outside the model, antithetic variates are a free
 feature of the engine: it generates one path, negates the noise vector,
@@ -167,8 +182,9 @@ println!("delta {:.4}  gamma {:.4}  vega {:.4}", greeks.delta, greeks.gamma, gre
 ```
 
 Delta, gamma, vega and rho use central differences; theta uses a backward
-difference, since stepping maturity forward would re-time every observation
-date of a path-dependent payoff. Vega and rho are per unit, not per point
+difference in maturity. Keeping step counts and observation indices fixed
+rescales **all observation times** with maturity: this is schedule-scaled
+`dV/dT`, rather than calendar roll-down theta. Vega and rho are per unit, not per point
 or basis point, and `theta` is `dV/dT` (positive for a longer-dated
 option). At 400k paths these land within ~0.3% of the Black-Scholes values
 for a vanilla call.
@@ -208,6 +224,7 @@ ends of the supported interpreter range:
 
 ```sh
 python tests/test_bindings.py
+python tests/test_extensions.py
 ```
 
 ## Python bindings
@@ -276,18 +293,76 @@ block other threads.
 A worked example with cross-checks against Black-Scholes, a convergence
 plot, and a barrier sweep lives at [`notebooks/example.ipynb`](notebooks/example.ipynb).
 
+### New products and models
+
+```python
+dates = [63, 126, 189, 252]
+print(engine.price_snowball(model, 100.0, 100.0, 0.12, 70.0, 103.0, dates))
+print(engine.price_phoenix(model, 100.0, 100.0, 2.0, 80.0, 60.0,
+                           105.0, dates, dates, memory=True))
+print(engine.price_asian_scheduled(model, "call", 100.0, dates,
+                                   control="geometric"))
+print(engine.price_continuous_barrier(model, "call", "up_and_out", 100.0, 130.0))
+
+heston = fe.HestonModel(spot=100, r=0.03, q=0.0, v0=0.04, kappa=1.5,
+                        theta=0.04, xi=0.4, rho=-0.7, t=1.0, steps=252)
+print(engine.price_european(heston, "call", 100.0))
+print(engine.price_snowball(heston, 100.0, 100.0, 0.12, 70.0, 103.0, dates))
+```
+
+`reference_spot` is the fixed initial contract fixing; barriers are absolute
+price levels. Snowball coupons are annual rates; Phoenix coupons are cash
+amounts per observation. See [the cashflow tables](docs/ROADMAP.md) for the
+exact contract variants. The structured methods have matching
+`greeks_snowball` / `greeks_phoenix` methods with the same arguments;
+scheduled Asian and continuous barrier also expose corresponding Greeks.
+Greeks, analytic controls, and continuous bridge methods require GBM and
+reject Heston with `ValueError`. All uncontrolled pricing methods accept both models.
+
+## Optional market tools
+
+Use Python 3.12 and the optional `market` extra for the SPXW workflow.
+Live access uses the desktop LSEG session and `LSEG_APP_KEY`; the doctor
+checks actual capabilities, and saved snapshots support offline replay.
+Desktop access, the SPX close, SPXW Search discovery/native daily history,
+and historical IPA surface/curve requests have succeeded for 2026-10-06.
+The reviewed capture contains 74 quotes across six expiries, with 72
+accepted quotes and a converged Heston fit on five qualifying expiries.
+The historical option probe reported delayed quote quality of service.
+
+```sh
+python -m pip install -e '.[market]'
+python -m tools.market_validation doctor --output artifacts/market_doctor
+python -m tools.market_validation run \
+  --snapshot path/to/snapshot.json --curves path/to/curves.csv \
+  --output artifacts/market_report
+```
+
+The CLI provides `doctor`, `fetch`, `validate`, `calibrate`, `report`, and
+`run`. QuantLib supplies the independent vanilla pricing/calibration path;
+the Rust Monte Carlo engine supplies separate grid/seed comparisons.
+The additive `fe.black_scholes_price(model, option_type, strike)` helper
+exposes the Rust closed-form GBM price for independent regression checks.
+See the [market validation guide](docs/MARKET_VALIDATION.md) for live-fetch
+examples, snapshot and curve conventions, command options, and output files.
+The guide records fit residuals and two insufficient-tail-sampling MC
+outcomes separately from core pricing checks. Its IPA overlay uses a
+labelled SDK percent/Black convention assumption, rather than response-verified units.
+
 ## Caveats
 
 - Barrier monitoring is **discrete on the simulation grid**. For a
-  continuously-monitored contract, either crank up `steps` or apply a
-  Broadie-Glasserman-Kou barrier shift before constructing the payoff.
+  continuously-monitored GBM contract, use `price_continuous_barrier`.
+  Structured note knock-in remains contractually discrete.
 - Greeks are finite-difference estimates. Pathwise and likelihood-ratio
   estimators converge better for the payoffs that admit them, but they need
   per-payoff derivative information, whereas bumping works on any `Payoff`
   as-is.
-- The library currently models a single underlying. The trait surface is
-  ready for multi-asset baskets - just implement `PathGenerator` over a
-  flattened `[asset, time]` buffer and adapt the payoffs accordingly.
+- Heston simulation has time-discretisation bias in addition to sampling
+  error; the Monte Carlo confidence interval measures sampling error only.
+- The library currently models a single underlying. Multi-asset baskets,
+  Heston-specific Greeks, and American/Bermudan exercise are future work.
+  Optional Python Heston calibration is part of the market tools.
 
 ## License
 

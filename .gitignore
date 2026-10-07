@@ -6,6 +6,7 @@
 
 # Python / maturin
 .venv/
+.venv-market/
 __pycache__/
 *.so
 *.pyd
@@ -14,3 +15,10 @@ dist/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local market-data snapshots, credentials, and SDK logs
+/artifacts/
+.env
+.env.*
+lseg-data.config.json
+pyeikon.*.log

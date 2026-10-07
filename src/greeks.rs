@@ -19,7 +19,7 @@
 
 use crate::error::PricingError;
 use crate::model::GbmModel;
-use crate::payoff::Payoff;
+use crate::payoff::{BarrierOption, Payoff};
 use crate::pricer::McEngine;
 
 /// First- and second-order sensitivities of a price.
@@ -31,8 +31,8 @@ pub struct Greeks {
     pub gamma: f64,
     /// `dV/dsigma`, per unit of volatility (not per volatility point).
     pub vega: f64,
-    /// `dV/dT`, the change in value as maturity lengthens. Negate it for
-    /// the usual "value lost per unit of calendar time" sign convention.
+    /// `dV/dT`, with all grid observation dates scaled proportionally
+    /// with maturity. Negate it for the usual calendar-theta sign.
     pub theta: f64,
     /// `dV/dr`, per unit of rate (not per basis point).
     pub rho: f64,
@@ -86,8 +86,8 @@ where
 /// Compute Greeks by bump-and-revalue.
 ///
 /// Delta, gamma, vega and rho use central differences; theta uses a
-/// backward difference, since stepping maturity forward past `T` would
-/// re-time every observation date of a path-dependent payoff.
+/// backward difference in maturity. The step count and observation indices
+/// stay fixed, so every observation time scales proportionally with `T`.
 ///
 /// Every revaluation runs at the engine's own seed. Do not pass an engine
 /// whose seed varies between calls: the cancellation that makes these
@@ -101,49 +101,146 @@ pub fn try_bump_and_revalue<P>(
 where
     P: Payoff + ?Sized,
 {
-    let price_with =
-        |m: &GbmModel| -> Result<f64, PricingError> { Ok(engine.try_price(m, payoff)?.price) };
+    try_bump_and_revalue_with(model, bumps, |m| Ok(engine.try_price(m, payoff)?.price))
+}
 
-    let with_spot = |s: f64| GbmModel {
-        spot: s,
-        ..model.clone()
+/// Compute GBM Greeks using a model-aware repricer.
+///
+/// The repricer must reuse the same engine seed, and reconstruct any
+/// model-dependent control expectation or bridge payoff for every call.
+/// The base model, bumps, and every perturbed model are validated before
+/// the first pricing run. The low-volatility down leg is clamped at zero.
+pub fn try_bump_and_revalue_with<F>(
+    model: &GbmModel,
+    bumps: BumpSizes,
+    reprice: F,
+) -> Result<Greeks, PricingError>
+where
+    F: Fn(&GbmModel) -> Result<f64, PricingError>,
+{
+    for (name, value) in [
+        ("spot_bump", bumps.spot),
+        ("volatility_bump", bumps.volatility),
+        ("rate_bump", bumps.rate),
+        ("maturity_bump", bumps.maturity),
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(PricingError::invalid(name, "must be finite and positive"));
+        }
+    }
+    let checked_model = |m: GbmModel| {
+        GbmModel::try_new(
+            m.spot,
+            m.risk_free_rate,
+            m.dividend_yield,
+            m.volatility,
+            m.maturity,
+            m.steps,
+        )
     };
-    let with_vol = |v: f64| GbmModel {
-        volatility: v,
+    let base_model = checked_model(model.clone())?;
+    let spot_up = checked_model(GbmModel {
+        spot: model.spot + bumps.spot,
         ..model.clone()
-    };
-    let with_rate = |r: f64| GbmModel {
-        risk_free_rate: r,
+    })?;
+    let spot_down = checked_model(GbmModel {
+        spot: model.spot - bumps.spot,
         ..model.clone()
-    };
-    let with_maturity = |t: f64| GbmModel {
-        maturity: t,
+    })?;
+    let vol_up = checked_model(GbmModel {
+        volatility: model.volatility + bumps.volatility,
         ..model.clone()
-    };
+    })?;
+    let vol_down = checked_model(GbmModel {
+        volatility: (model.volatility - bumps.volatility).max(0.0),
+        ..model.clone()
+    })?;
+    let rate_up = checked_model(GbmModel {
+        risk_free_rate: model.risk_free_rate + bumps.rate,
+        ..model.clone()
+    })?;
+    let rate_down = checked_model(GbmModel {
+        risk_free_rate: model.risk_free_rate - bumps.rate,
+        ..model.clone()
+    })?;
+    let shorter = checked_model(GbmModel {
+        maturity: model.maturity - bumps.maturity,
+        ..model.clone()
+    })?;
 
-    let base = price_with(model)?;
-
+    // Avoid a formally positive bump that rounds away in floating point
+    // or leaves an unrepresentable denominator.
+    if spot_up.spot == model.spot
+        || spot_down.spot == model.spot
+        || !bumps.spot.powi(2).is_finite()
+        || bumps.spot.powi(2) == 0.0
+    {
+        return Err(PricingError::invalid(
+            "spot_bump",
+            "must produce finite distinct spot legs",
+        ));
+    }
+    if vol_up.volatility == model.volatility
+        || (vol_up.volatility - vol_down.volatility).is_infinite()
+    {
+        return Err(PricingError::invalid(
+            "volatility_bump",
+            "must produce finite distinct volatility legs",
+        ));
+    }
+    if rate_up.risk_free_rate == model.risk_free_rate
+        || rate_down.risk_free_rate == model.risk_free_rate
+        || !(2.0 * bumps.rate).is_finite()
+    {
+        return Err(PricingError::invalid(
+            "rate_bump",
+            "must produce finite distinct rate legs",
+        ));
+    }
+    if shorter.maturity == model.maturity {
+        return Err(PricingError::invalid(
+            "maturity_bump",
+            "must produce a distinct shorter maturity",
+        ));
+    }
+    let price_with = |m: &GbmModel| -> Result<f64, PricingError> {
+        let price = reprice(m)?;
+        if !price.is_finite() {
+            return Err(PricingError::invalid(
+                "price",
+                "repricer must return a finite value",
+            ));
+        }
+        Ok(price)
+    };
+    let base = price_with(&base_model)?;
     let h_s = bumps.spot;
-    let up = price_with(&with_spot(model.spot + h_s))?;
-    let down = price_with(&with_spot(model.spot - h_s))?;
+    let up = price_with(&spot_up)?;
+    let down = price_with(&spot_down)?;
     let delta = (up - down) / (2.0 * h_s);
     let gamma = (up - 2.0 * base + down) / (h_s * h_s);
 
     // Volatility cannot go negative, so for a very low base vol the down
     // leg is clamped at zero and the difference is divided by the spread
     // actually used rather than the nominal 2h.
-    let vol_up = model.volatility + bumps.volatility;
-    let vol_down = (model.volatility - bumps.volatility).max(0.0);
     let vega =
-        (price_with(&with_vol(vol_up))? - price_with(&with_vol(vol_down))?) / (vol_up - vol_down);
+        (price_with(&vol_up)? - price_with(&vol_down)?) / (vol_up.volatility - vol_down.volatility);
 
     let h_r = bumps.rate;
-    let rho = (price_with(&with_rate(model.risk_free_rate + h_r))?
-        - price_with(&with_rate(model.risk_free_rate - h_r))?)
-        / (2.0 * h_r);
+    let rho = (price_with(&rate_up)? - price_with(&rate_down)?) / (2.0 * h_r);
 
     let h_t = bumps.maturity;
-    let theta = (base - price_with(&with_maturity(model.maturity - h_t))?) / h_t;
+    let theta = (base - price_with(&shorter)?) / h_t;
+
+    if [delta, gamma, vega, theta, rho]
+        .iter()
+        .any(|value| !value.is_finite())
+    {
+        return Err(PricingError::invalid(
+            "greeks",
+            "finite differences overflowed; adjust pricing parameters or bumps",
+        ));
+    }
 
     Ok(Greeks {
         delta,
@@ -151,5 +248,18 @@ where
         vega,
         theta,
         rho,
+    })
+}
+
+/// GBM continuously monitored barrier Greeks. Each bumped valuation
+/// rebuilds the bridge weights using that leg's volatility.
+pub fn try_continuous_barrier_greeks(
+    engine: &McEngine,
+    model: &GbmModel,
+    payoff: &BarrierOption,
+    bumps: BumpSizes,
+) -> Result<Greeks, PricingError> {
+    try_bump_and_revalue_with(model, bumps, |m| {
+        Ok(engine.try_price_continuous_barrier(m, payoff)?.price)
     })
 }

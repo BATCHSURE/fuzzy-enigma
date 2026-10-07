@@ -30,11 +30,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Clippy Python bindings
+        run: cargo clippy --all-targets --features python -- -D warnings
+
       - name: Test
         run: cargo test --release
 
       - name: Example
-        run: cargo run --release --example price_options
+        run: |
+          cargo run --release --example price_options
+          cargo run --release --example advanced_pricing
 
   python:
     name: python bindings / build ${{ matrix.python-version }}
@@ -45,7 +50,7 @@ jobs:
         # The bindings broke once because the local interpreter outran the
         # pinned PyO3. Building at both ends of the supported range catches
         # that before it reaches a user.
-        python-version: ["3.9", "3.13"]
+        python-version: ["3.9", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -69,6 +74,7 @@ jobs:
         run: |
           . .venv/bin/activate
           python tests/test_bindings.py
+          python tests/test_extensions.py
 
   abi3:
     # The extension is built with `abi3-py39`, so one wheel must load on
@@ -104,12 +110,34 @@ jobs:
             3.11
             3.12
             3.13
+            3.14
 
       - name: Import the same wheel from every interpreter
         run: |
           set -e
-          for v in 3.9 3.10 3.11 3.12 3.13; do
+          for v in 3.9 3.10 3.11 3.12 3.13 3.14; do
             echo "--- CPython $v ---"
             python$v -m pip install --quiet --force-reinstall dist/*.whl
             python$v tests/test_bindings.py
+            python$v tests/test_extensions.py
           done
+
+  market-and-notebooks:
+    name: offline market regressions and notebooks
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the extension and optional research dependencies
+        run: |
+          python -m pip install ".[market,notebooks]"
+      - name: Offline market regressions
+        run: python -m unittest discover -s tests -p test_market_validation.py -v
+      - name: Execute all notebooks in fresh kernels
+        run: python tools/run_notebooks.py

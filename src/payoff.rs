@@ -64,6 +64,40 @@ pub trait Payoff: Send + Sync {
     }
 }
 
+/// Validate an observation schedule once, before path simulation.
+///
+/// Existing autocallables permit an inception observation; newer contracts
+/// whose schedules represent future payments pass `allow_initial = false`.
+pub(crate) fn validate_observation_indices(
+    indices: &[usize],
+    steps: usize,
+    allow_initial: bool,
+) -> Result<(), PricingError> {
+    let Some(&first) = indices.first() else {
+        return Err(PricingError::EmptyObservationSchedule);
+    };
+    if first == 0 && !allow_initial {
+        return Err(PricingError::invalid(
+            "observation_indices",
+            "observations must occur after the initial fixing",
+        ));
+    }
+    let mut previous = first;
+    for (position, &index) in indices.iter().enumerate() {
+        if index > steps {
+            return Err(PricingError::ObservationOutOfRange { index, steps });
+        }
+        if position > 0 && index <= previous {
+            return Err(PricingError::UnorderedObservationSchedule {
+                previous,
+                next: index,
+            });
+        }
+        previous = index;
+    }
+    Ok(())
+}
+
 // -----------------------------------------------------------------------
 // European
 // -----------------------------------------------------------------------
@@ -270,23 +304,7 @@ pub struct AutocallableNote {
 
 impl Payoff for AutocallableNote {
     fn validate(&self, steps: usize) -> Result<(), PricingError> {
-        let Some(&first) = self.observation_indices.first() else {
-            return Err(PricingError::EmptyObservationSchedule);
-        };
-        let mut previous = first;
-        for (position, &index) in self.observation_indices.iter().enumerate() {
-            if index > steps {
-                return Err(PricingError::ObservationOutOfRange { index, steps });
-            }
-            if position > 0 && index <= previous {
-                return Err(PricingError::UnorderedObservationSchedule {
-                    previous,
-                    next: index,
-                });
-            }
-            previous = index;
-        }
-        Ok(())
+        validate_observation_indices(&self.observation_indices, steps, true)
     }
 
     fn evaluate(&self, path: &[f64], dt: f64, r: f64) -> f64 {

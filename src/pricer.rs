@@ -111,7 +111,7 @@ impl McEngine {
         M: PathGenerator + ?Sized,
         P: Payoff + ?Sized,
     {
-        let n_steps = model.steps();
+        let (n_steps, noise_dim) = validate_model(model)?;
         payoff.validate(n_steps)?;
         if self.paths == 0 {
             return Err(PricingError::NoPaths);
@@ -129,7 +129,7 @@ impl McEngine {
             self.paths
         };
 
-        let samples = self.run_samples(n_samples, n_steps, |normals, path, i| {
+        let samples = self.run_samples(n_samples, n_steps, noise_dim, |normals, path, i| {
             self.fill_normals(normals, i);
             model.generate(normals, path);
             let pv1 = payoff.evaluate(path, dt, r);
@@ -185,10 +185,17 @@ impl McEngine {
         P: Payoff + ?Sized,
         C: ControlVariate + ?Sized,
     {
-        let n_steps = model.steps();
+        let (n_steps, noise_dim) = validate_model(model)?;
         payoff.validate(n_steps)?;
+        control.validate(n_steps)?;
         if self.paths == 0 {
             return Err(PricingError::NoPaths);
+        }
+        if !control.expectation().is_finite() {
+            return Err(PricingError::invalid(
+                "control expectation",
+                "must be finite",
+            ));
         }
 
         let dt = model.maturity() / n_steps as f64;
@@ -201,24 +208,25 @@ impl McEngine {
 
         // Payoff and control are scored on the very same paths - that
         // shared randomness is the whole source of their correlation.
-        let pairs: Vec<(f64, f64)> = self.run_samples(n_samples, n_steps, |normals, path, i| {
-            self.fill_normals(normals, i);
-            model.generate(normals, path);
-            let (y1, x1) = (payoff.evaluate(path, dt, r), control.evaluate(path, dt, r));
-
-            if self.antithetic {
-                for v in normals.iter_mut() {
-                    *v = -*v;
-                }
+        let pairs: Vec<(f64, f64)> =
+            self.run_samples(n_samples, n_steps, noise_dim, |normals, path, i| {
+                self.fill_normals(normals, i);
                 model.generate(normals, path);
-                (
-                    0.5 * (y1 + payoff.evaluate(path, dt, r)),
-                    0.5 * (x1 + control.evaluate(path, dt, r)),
-                )
-            } else {
-                (y1, x1)
-            }
-        });
+                let (y1, x1) = (payoff.evaluate(path, dt, r), control.evaluate(path, dt, r));
+
+                if self.antithetic {
+                    for v in normals.iter_mut() {
+                        *v = -*v;
+                    }
+                    model.generate(normals, path);
+                    (
+                        0.5 * (y1 + payoff.evaluate(path, dt, r)),
+                        0.5 * (x1 + control.evaluate(path, dt, r)),
+                    )
+                } else {
+                    (y1, x1)
+                }
+            });
 
         let n = pairs.len() as f64;
         let mean_y = pairs.iter().map(|p| p.0).sum::<f64>() / n;
@@ -264,12 +272,12 @@ impl McEngine {
     /// keeps the per-path heap traffic out of the hot loop. Because each
     /// sample derives its own RNG stream from its index, the result is
     /// identical - bit for bit - whether or not `parallel` is set.
-    fn run_samples<F, T>(&self, n_samples: usize, n_steps: usize, f: F) -> Vec<T>
+    fn run_samples<F, T>(&self, n_samples: usize, n_steps: usize, noise_dim: usize, f: F) -> Vec<T>
     where
         F: Fn(&mut Vec<f64>, &mut Vec<f64>, usize) -> T + Send + Sync,
         T: Send,
     {
-        let make_buffers = || (vec![0.0_f64; n_steps], vec![0.0_f64; n_steps + 1]);
+        let make_buffers = || (vec![0.0_f64; noise_dim], vec![0.0_f64; n_steps + 1]);
 
         if self.parallel {
             (0..n_samples)
@@ -299,12 +307,48 @@ impl McEngine {
 /// tradeable payoff the engine prices - it is scaffolding used to price
 /// something else.
 pub trait ControlVariate: Send + Sync {
+    /// Validate any observation schedule before path simulation.
+    fn validate(&self, _steps: usize) -> Result<(), PricingError> {
+        Ok(())
+    }
+
     /// Present value of the control on this path, using the same
     /// convention as [`Payoff::evaluate`].
     fn evaluate(&self, path: &[f64], dt: f64, r: f64) -> f64;
 
     /// The control's analytically known expectation.
     fn expectation(&self) -> f64;
+}
+
+/// Validate the common model contract, including custom implementations
+/// that rely on the default model-specific validation hook.
+fn validate_model<M: PathGenerator + ?Sized>(model: &M) -> Result<(usize, usize), PricingError> {
+    model.validate()?;
+    let steps = model.steps();
+    if steps == 0 {
+        return Err(PricingError::invalid("steps", "must be at least 1"));
+    }
+    let path_len = steps
+        .checked_add(1)
+        .ok_or_else(|| PricingError::invalid("steps", "path length overflows"))?;
+    if !model.maturity().is_finite() || model.maturity() <= 0.0 {
+        return Err(PricingError::invalid(
+            "maturity",
+            "must be finite and positive",
+        ));
+    }
+    if !model.risk_free_rate().is_finite() {
+        return Err(PricingError::invalid("risk_free_rate", "must be finite"));
+    }
+    let noise_dim = model.noise_dim();
+    let max_buffer_len = (isize::MAX as usize) / std::mem::size_of::<f64>();
+    if path_len > max_buffer_len || noise_dim > max_buffer_len {
+        return Err(PricingError::invalid(
+            "steps",
+            "simulation buffer size overflows",
+        ));
+    }
+    Ok((steps, noise_dim))
 }
 
 /// A European option under [`GbmModel`] used as a control variate.

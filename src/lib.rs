@@ -20,17 +20,24 @@ pub mod analytic;
 pub mod error;
 pub mod greeks;
 pub mod model;
+pub mod numerical;
 pub mod payoff;
 pub mod pricer;
+pub mod structured;
 
 #[cfg(feature = "python")]
 mod python;
 
 pub use error::PricingError;
-pub use greeks::{bump_and_revalue, BumpSizes, Greeks};
-pub use model::{GbmModel, PathGenerator};
+pub use greeks::{
+    bump_and_revalue, try_bump_and_revalue, try_bump_and_revalue_with,
+    try_continuous_barrier_greeks, BumpSizes, Greeks,
+};
+pub use model::{GbmModel, HestonModel, PathGenerator};
+pub use numerical::{geometric_asian_price, GeometricAsianControl, ScheduledAsianOption};
 pub use payoff::{
     AsianOption, AutocallableNote, BarrierKind, BarrierOption, CliquetOption, EuropeanOption,
     LookbackOption, OptionType, Payoff,
 };
 pub use pricer::{ControlVariate, EuropeanControl, McEngine, PriceResult};
+pub use structured::{PhoenixNote, SnowballNote};
