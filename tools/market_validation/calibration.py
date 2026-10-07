@@ -38,7 +38,7 @@ def _parameters(params):
     return result
 
 
-def _heston_prices(rows, params):
+def _heston_prices(rows, params, integration_precision=None):
     params = _parameters(params)
     if not rows:
         return []
@@ -65,7 +65,9 @@ def _heston_prices(rows, params):
                 dividend = ql.YieldTermStructureHandle(ql.FlatForward(start, row["q"], day_count))
                 process = ql.HestonProcess(risk_free, dividend, ql.QuoteHandle(ql.SimpleQuote(row["spot"])),
                                           params["v0"], params["kappa"], params["theta"], params["xi"], params["rho"])
-                engines[key] = ql.AnalyticHestonEngine(ql.HestonModel(process), 144)
+                model = ql.HestonModel(process)
+                engines[key] = (ql.AnalyticHestonEngine(model, 144) if integration_precision is None
+                                else ql.AnalyticHestonEngine(model, float(integration_precision), 100_000))
             payoff = ql.PlainVanillaPayoff(ql.Option.Call if row["kind"] == "call" else ql.Option.Put, row["strike"])
             option = ql.VanillaOption(payoff, ql.EuropeanExercise(ql_date(row["expiry"])))
             option.setPricingEngine(engines[key])
@@ -76,9 +78,9 @@ def _heston_prices(rows, params):
         return result
 
 
-def heston_price(row, params):
+def heston_price(row, params, integration_precision=None):
     """Independent deterministic price with the row's effective flat carry."""
-    return _heston_prices([row], params)[0]
+    return _heston_prices([row], params, integration_precision=integration_precision)[0]
 
 
 def _metrics(rows, prices):
@@ -210,13 +212,53 @@ def _stratified(rows):
     return result
 
 
+def _numerical_tolerance(reference):
+    # The former absolute 1e-7 allowance concealed missing 1e-6 tail prices.
+    # An exactly zero estimate of a positive reference is always rejected below.
+    return 1e-12 + abs(reference) * 1e-8
+
+
+def _grid_summary(records, reference, relative_se_target=None):
+    """Combine distinct equal-budget seeds, without mixing estimators or grids."""
+    mean = sum(record["mc_price"] for record in records) / len(records)
+    se = math.sqrt(sum(record["std_error"] ** 2 for record in records)) / len(records)
+    relative_se = se / reference if reference > 0 else None
+    missing_tail = reference > 0 and mean <= 0
+    sampling_resolved = not missing_tail and (
+        relative_se_target is None or relative_se is None or relative_se <= relative_se_target
+    )
+    within = not missing_tail and abs(mean - reference) <= 4 * se + _numerical_tolerance(reference)
+    if not sampling_resolved:
+        classification = "insufficient_tail_sampling"
+    elif within:
+        classification = "within_sampling_error"
+    else:
+        classification = "unresolved_discretization_or_implementation_error"
+    return {"steps": records[0]["steps"], "paths": records[0]["paths"],
+            "seeds": [record["seed"] for record in records], "mean_price": mean,
+            "combined_std_error": se, "reference_price": reference, "price_error": mean - reference,
+            "relative_std_error": relative_se, "sampling_resolved": sampling_resolved,
+            "within_sampling_tolerance": within, "classification": classification}
+
+
 def numerical_validation(validated, params=None, paths=100_000, steps=(64, 256, 1024), seeds=(42, 43, 44)):
     """Compare core MC to independent QL references, never to inverted Close.
 
     GBM uses fixed sigma=0.20. Heston uses the supplied calibrated parameters.
     Grid changes are reported separately from sample confidence and market fit.
+    Underresolved Heston tails are automatically rechecked in the Rust core by
+    conditional Monte Carlo with a defensive Gaussian mixture. The fallback
+    analytically integrates the independent stock noise and retains the same
+    log-Euler/full-truncation variance discretization; it does not replace the
+    original estimate, fit to the reference, or combine correlated estimators.
     """
-    if paths < 1 or not steps or any(step < 1 for step in steps):
+    if isinstance(paths, bool) or not isinstance(paths, Integral) or paths < 1:
+        raise ValueError("paths must be a positive integer")
+    try:
+        steps = tuple(steps)
+    except TypeError as exc:
+        raise ValueError("steps must be a non-empty sequence of positive integers") from exc
+    if not steps or any(isinstance(step, bool) or not isinstance(step, Integral) or step < 1 for step in steps):
         raise ValueError("positive paths/steps and at least one seed are required")
     try:
         seeds = tuple(seeds)
@@ -232,36 +274,54 @@ def numerical_validation(validated, params=None, paths=100_000, steps=(64, 256, 
         import fuzzy_enigma as fe
     except ImportError as exc:
         raise RuntimeError("Numerical verification requires the built fuzzy_enigma extension.") from exc
+    paths = int(paths)
     steps = sorted(set(map(int, steps)))
     rows = _stratified(validated["accepted"])
     params = _parameters(params) if params is not None else None
-    records, summaries = [], []
+    shifts = [0.0, -4.0, 4.0]
+    severe_relative_se, target_relative_se = 0.25, 0.10
+    records, summaries, tail_rechecks = [], [], []
     for row in rows:
         references = {"GBM": black_price(row, 0.2)}
         if params is not None:
-            references["Heston"] = heston_price(row, params)
+            references["Heston"] = heston_price(row, params, integration_precision=1e-12)
         for name, reference in references.items():
+            reference_method = "QuantLib BlackCalculator" if name == "GBM" else "QuantLib analytic Heston adaptive integration, tolerance 1e-12"
+            if name == "Heston" and params["xi"] == 0:
+                reference_method = "QuantLib BlackCalculator with exact continuous deterministic-variance integral"
             try:
                 reference_iv = implied_volatility(row, reference)
             except (ValueError, RuntimeError):
                 reference_iv = None
-            local = []
-            for step in steps:
+            local, conditional = [], []
+
+            def run_grid(step, budget, estimator):
+                grid = []
                 for seed in seeds:
-                    engine = fe.McEngine(paths=paths, seed=seed, antithetic=True, parallel=True)
+                    engine = fe.McEngine(paths=budget, seed=seed, antithetic=True, parallel=True)
                     if name == "GBM":
                         model = fe.GbmModel(row["spot"], row["r"], row["q"], 0.2, row["t"], steps=step)
                     else:
                         model = fe.HestonModel(row["spot"], row["r"], row["q"], params["v0"], params["kappa"],
                                                params["theta"], params["xi"], params["rho"], row["t"], steps=step)
-                    result = engine.price_european(model, row["kind"], row["strike"])
+                    if estimator == "plain":
+                        result = engine.price_european(model, row["kind"], row["strike"])
+                    else:
+                        if not hasattr(engine, "price_heston_conditional"):
+                            raise RuntimeError("Heston tail verification requires rebuilding the extension with price_heston_conditional")
+                        result = engine.price_heston_conditional(model, row["kind"], row["strike"], variance_shifts=shifts)
                     gap = result.price - reference
-                    tolerance = 4.0 * result.std_error + 1e-7
+                    tolerance = 4.0 * result.std_error + _numerical_tolerance(reference)
                     record = {"ric": row["ric"], "expiry": row["expiry"], "strike": row["strike"], "kind": row["kind"],
-                              "model": name, "paths": paths, "samples": result.samples, "steps": step, "seed": seed,
+                              "model": name, "paths": budget, "samples": result.samples, "steps": step, "seed": seed,
+                              "estimator": estimator, "method": estimator,
+                              "importance_shifts": shifts if estimator == "conditional_importance" else [],
+                              "reference_method": reference_method,
                               "reference_price": reference, "mc_price": result.price, "std_error": result.std_error,
+                              "relative_std_error": result.std_error / reference if reference > 0 else None,
                               "price_error": gap, "z_score": gap / result.std_error if result.std_error > 0 else None,
-                              "within_sampling_tolerance": abs(gap) <= tolerance, "reference_iv": reference_iv,
+                              "within_sampling_tolerance": not (reference > 0 and result.price <= 0) and abs(gap) <= tolerance,
+                              "reference_iv": reference_iv,
                               "mc_iv": None, "iv_error_bp": None, "iv_error_reason": None}
                     try:
                         record["mc_iv"] = implied_volatility(row, result.price)
@@ -274,21 +334,82 @@ def numerical_validation(validated, params=None, paths=100_000, steps=(64, 256, 
                         record["core_analytic_price"] = analytic
                         record["core_analytic_error"] = analytic - reference
                     records.append(record)
-                    local.append(record)
-            finest = [record for record in local if record["steps"] == steps[-1]]
-            mean = sum(record["mc_price"] for record in finest) / len(finest)
-            se = math.sqrt(sum(record["std_error"] ** 2 for record in finest)) / len(finest)
-            fine_gap = mean - reference
-            previous = [record for record in local if len(steps) > 1 and record["steps"] == steps[-2]]
-            previous_mean = sum(record["mc_price"] for record in previous) / len(previous) if previous else None
-            classification = "within_sampling_error" if abs(fine_gap) <= 4 * se + 1e-7 else "unresolved_discretization_or_implementation_error"
-            if se == 0 and mean == 0 and reference > 1e-7:
-                classification = "insufficient_tail_sampling"
-            summaries.append({"ric": row["ric"], "model": name, "finest_steps": steps[-1], "mean_price": mean,
-                              "combined_std_error": se, "reference_price": reference, "price_error": fine_gap,
-                              "last_grid_change": mean - previous_mean if previous_mean is not None else None,
-                              "classification": classification,
-                              "meaning": "Core/reference comparison; no conclusion about market-price fit"})
+                    grid.append(record)
+                return grid
+
+            for step in steps:
+                local.extend(run_grid(step, paths, "plain"))
+            crude_grids = [_grid_summary([record for record in local if record["steps"] == step], reference,
+                                        severe_relative_se) for step in steps]
+            crude = crude_grids[-1]
+            selected, chosen_steps, estimator = crude, steps, "plain"
+            selected_grids = crude_grids
+            resolution = None
+            if name == "Heston" and not crude["sampling_resolved"]:
+                trigger = "no positive crude payoff" if crude["mean_price"] <= 0 else "crude relative standard error exceeds 25%"
+                convergence = {"gauss_laguerre_144": heston_price(row, params),
+                               "adaptive_1e-10": heston_price(row, params, integration_precision=1e-10),
+                               "adaptive_1e-12": reference}
+                convergence["adaptive_difference"] = abs(convergence["adaptive_1e-10"] - reference)
+                convergence["fixed_quadrature_difference"] = abs(convergence["gauss_laguerre_144"] - reference)
+                extra_step = max(steps[-1], min(16_384, max(1024, 4 * steps[-1])))
+                chosen_steps = sorted(set(steps + [extra_step]))
+                estimator = "conditional_importance"
+                for step in chosen_steps:
+                    conditional.extend(run_grid(step, paths, estimator))
+                selected_grids = [_grid_summary([record for record in conditional if record["steps"] == step], reference,
+                                               target_relative_se) for step in chosen_steps]
+                selected = selected_grids[-1]
+                refinement = None
+                # One additional, bounded refinement: sampling shortages need
+                # paths, while resolved samples with a price gap need a grid.
+                if not selected["sampling_resolved"]:
+                    refinement = {"reason": "conditional relative standard error remains above 10%", "paths": 4 * paths,
+                                  "steps": chosen_steps[-1]}
+                elif not selected["within_sampling_tolerance"] and chosen_steps[-1] < 16_384:
+                    refinement = {"reason": "resolved sampling still leaves a reference gap", "paths": paths,
+                                  "steps": min(16_384, 4 * chosen_steps[-1])}
+                if refinement is not None:
+                    new_grid = run_grid(refinement["steps"], refinement["paths"], estimator)
+                    conditional.extend(new_grid)
+                    selected = _grid_summary(new_grid, reference, target_relative_se)
+                    selected_grids.append(selected)
+                    chosen_steps = sorted(set(chosen_steps + [refinement["steps"]]))
+                for record in conditional:
+                    record["crude_classification"] = crude["classification"]
+                resolution = {"trigger": trigger, "estimator": estimator, "variance_shifts": shifts,
+                              "likelihood": "target Gaussian density / defensive mixture density using actual stratum counts",
+                              "conditional_scheme": "same Rust log-Euler stock and raw-state full-truncation variance steps",
+                              "sample_unit": "antithetic pair within a deterministic mixture stratum",
+                              "std_error": "pooled pair standard error; conservative for deterministic balanced strata",
+                              "reference_convergence": convergence, "grids": selected_grids,
+                              "refinement": refinement, "target_relative_std_error": target_relative_se,
+                              "sampling_resolved": selected["sampling_resolved"],
+                              "reference_agreement": selected["within_sampling_tolerance"],
+                              "acceptance": "positive estimate for positive reference, relative SE <= 10%, and reference gap <= 4 SE + numerical tolerance",
+                              "status": "resolved" if selected["classification"] == "within_sampling_error" else "unresolved"}
+                tail_rechecks.append({"ric": row["ric"], "model": name, **resolution})
+            # A paths-only refinement is sampling evidence, not a grid change.
+            previous = next((grid for grid in reversed(selected_grids[:-1])
+                             if grid["steps"] < selected["steps"] and grid["paths"] == selected["paths"]), None)
+            summary = {"ric": row["ric"], "model": name, "finest_steps": selected["steps"],
+                       "paths": selected["paths"], "mean_price": selected["mean_price"],
+                       "combined_std_error": selected["combined_std_error"], "reference_price": reference,
+                       "reference_method": reference_method, "price_error": selected["price_error"],
+                       "relative_std_error": selected["relative_std_error"], "estimator": estimator, "method": estimator,
+                       "importance_shifts": shifts if estimator == "conditional_importance" else [],
+                       "last_grid_change": selected["mean_price"] - previous["mean_price"] if previous else None,
+                       "last_grid_comparison_steps": [previous["steps"], selected["steps"]] if previous else None,
+                       "classification": selected["classification"], "crude_classification": crude["classification"],
+                       "crude": {**crude, "estimator": "plain", "grids": crude_grids}, "tail_resolution": resolution,
+                       "meaning": "Core/reference comparison; no conclusion about market-price fit"}
+            summaries.append(summary)
     return {"schema_version": 1, "source": validated["source"], "settings": {"paths": paths, "steps": steps,
-            "seeds": list(seeds), "gbm_sigma": 0.2, "heston_params": params}, "records": records,
-            "summaries": summaries, "status": "completed" if rows else "no_eligible_quotes"}
+            "seeds": list(seeds), "gbm_sigma": 0.2, "heston_params": params,
+            "heston_reference": "adaptive QuantLib integration with tolerance 1e-12",
+            "conditional_variance_shifts": shifts, "severe_relative_se": severe_relative_se,
+            "target_tail_relative_se": target_relative_se, "tail_extra_grid": "max(1024, 4*finest), capped at 16384 extra steps",
+            "tail_additional_refinement": "at most one: 4x paths for unresolved sampling or 4x steps for resolved sampling with a reference gap",
+            "numerical_tolerance": "1e-12 + abs(reference)*1e-8; zero estimates of positive references always fail"},
+            "records": records, "summaries": summaries, "tail_rechecks": tail_rechecks,
+            "status": "completed" if rows else "no_eligible_quotes"}

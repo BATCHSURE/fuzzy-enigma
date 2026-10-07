@@ -22,7 +22,9 @@ def _write_csv(path, rows, fields):
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows({key: json.dumps(value, sort_keys=True, allow_nan=False)
+                          if isinstance(value, (dict, list)) else value
+                          for key, value in row.items()} for row in rows)
 
 
 def _vendor_points(validated):
@@ -73,6 +75,11 @@ def _plots(validated, calibration, output):
     vendor = _vendor_points(validated)
     warnings, artifacts = [], []
     vendor_metadata = validated.get("vendor_surface") or {}
+    if not vendor_metadata:
+        capture = validated.get("capture_diagnostics", {})
+        verification = capture.get("vendor_surface_verification") or {}
+        if verification.get("status") in {"unverified", "unavailable", "error"}:
+            warnings.append("Supplier volatility overlay is unavailable: typed unit/model verification did not succeed. The untyped IPA matrix remains raw evidence and is excluded from comparisons; inspect capture_diagnostics for provider errors.")
     if vendor_metadata and not vendor_metadata.get("units_verified_by_response", True):
         warnings.append("LSEG overlay uses the recorded SDK example convention (percent, European Black IV); the response did not declare units. It is a fitted-model diagnostic, not an independent pricing reference.")
     if validated.get("vendor_surface") and not vendor:
@@ -192,7 +199,10 @@ def write_report(validated, calibration_or_none, numerical_or_none, output):
     numerical_fields = ["ric", "expiry", "strike", "kind", "model", "paths", "samples", "steps", "seed", "reference_price",
                         "mc_price", "std_error", "price_error", "z_score", "core_analytic_price", "core_analytic_error",
                         "within_sampling_tolerance", "reference_iv", "mc_iv", "iv_error_bp", "iv_error_reason"]
-    _write_csv(output / "numerical_validation.csv", numerical_or_none.get("records", []) if numerical_or_none else [], numerical_fields)
+    numerical_records = numerical_or_none.get("records", []) if numerical_or_none else []
+    numerical_fields += sorted({key for row in numerical_records for key in row
+                                if key not in numerical_fields})
+    _write_csv(output / "numerical_validation.csv", numerical_records, numerical_fields)
     images, warnings = _plots(validated, calibration_or_none, output)
     summary = {"source": validated["source"], "spot": validated["spot"], "accepted_quotes": len(validated["accepted"]),
                "dataset_sha256": validated.get("dataset_sha256"), "versions": validated.get("versions"),
@@ -211,21 +221,36 @@ def write_report(validated, calibration_or_none, numerical_or_none, output):
                "numerical_status": numerical_or_none.get("status") if numerical_or_none else "not_requested",
                "numerical_summaries": numerical_or_none.get("summaries") if numerical_or_none else None,
                "warnings": warnings, "diagnostics": validated["diagnostics"]}
+    summary["capture_diagnostics"] = validated.get("capture_diagnostics", {})
     _write_json(output / "summary.json", summary)
     links = ["summary.json", "validation.json", "calibration.json", "numerical_validation.json", "residuals.csv", "numerical_validation.csv"]
     figures = "\n".join(f'<figure><img src="{html.escape(name)}" alt="{html.escape(name)}"><figcaption>{html.escape(name)}</figcaption></figure>' for name in images)
     link_html = " · ".join(f'<a href="{html.escape(name)}">{html.escape(name)}</a>' for name in links)
+    checks = numerical_or_none.get("summaries", []) if numerical_or_none else []
+    check_rows = "".join("<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+        row["ric"], row["model"], row.get("estimator", "plain"),
+        format(row["mean_price"], ".9g"), format(row["reference_price"], ".9g"),
+        format(row["combined_std_error"], ".3g"),
+        format(100 * row["relative_std_error"], ".3g") if row.get("relative_std_error") is not None else "—",
+        row["classification"])) + "</tr>" for row in checks)
+    check_table = ("<h2>Independent numerical checks</h2><table><thead><tr>"
+                   "<th>Contract</th><th>Model</th><th>Estimator</th><th>Price</th>"
+                   "<th>Reference</th><th>Standard error</th><th>SE / reference (%)</th><th>Outcome</th>"
+                   "</tr></thead><tbody>" + check_rows + "</tbody></table>"
+                   "<p>Original sampling results, rare-event rechecks, reference quadrature, "
+                   "and grid changes are retained in the JSON and CSV evidence.</p>") if checks else ""
     page = f'''<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SPX EOD market validation</title><style>
 body{{font:16px/1.5 system-ui,sans-serif;color:#17212b;max-width:1200px;margin:40px auto;padding:0 24px}}
 pre{{background:#f3f5f7;padding:20px;overflow:auto}}img{{max-width:100%;height:auto}}figure{{margin:32px 0}}
 a{{color:#075b94}}.note{{border-left:4px solid #d49721;padding:12px 18px;background:#fff8e6}}
+table{{border-collapse:collapse;width:100%;font-size:14px}}th,td{{border-bottom:1px solid #dce2e8;padding:8px;text-align:left}}
 </style><h1>SPX EOD market validation</h1>
 <p class="note">Observed references are Close prices, not bid/ask mid prices. Missing historical bid/ask does not imply a tradable price interval.
 Calibration residuals measure market fit; independent core-versus-QuantLib results measure sampling and discretization or implementation error.
 The every-fifth-strike holdout tests interpolation within observed expiries. Surface plots interpolate total variance inside the observed hull, without extrapolation or an arbitrage-free claim.</p>
-<p>{link_html}</p><h2>Run summary</h2><pre>{html.escape(json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False))}</pre>
+<p>{link_html}</p>{check_table}<h2>Run summary</h2><pre>{html.escape(json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False))}</pre>
 {figures}</html>'''
     path = output / "report.html"
     path.write_text(page, encoding="utf-8")

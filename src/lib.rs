@@ -24,6 +24,7 @@ pub mod numerical;
 pub mod payoff;
 pub mod pricer;
 pub mod structured;
+pub mod validation;
 
 #[cfg(feature = "python")]
 mod python;
@@ -41,3 +42,4 @@ pub use payoff::{
 };
 pub use pricer::{ControlVariate, EuropeanControl, McEngine, PriceResult};
 pub use structured::{PhoenixNote, SnowballNote};
+pub use validation::{try_price_heston_conditional, try_price_heston_conditional_with_shifts};

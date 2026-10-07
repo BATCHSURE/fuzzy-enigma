@@ -194,6 +194,17 @@ pub struct HestonModel {
 }
 
 impl HestonModel {
+    /// The shared pre-update variance, diffusion and raw next variance.
+    /// Conditional vanilla pricing uses exactly the same full-truncation
+    /// transition as path simulation, including negative raw states.
+    pub(crate) fn variance_step(&self, raw: f64, dt: f64, normal: f64) -> (f64, f64, f64) {
+        let variance = raw.max(0.0);
+        let diffusion = (variance * dt).sqrt();
+        let increment =
+            self.kappa * (self.theta - variance) * dt + self.vol_of_vol * diffusion * normal;
+        (variance, diffusion, raw + increment)
+    }
+
     /// Construct a model, panicking on invalid parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -320,16 +331,15 @@ impl PathGenerator for HestonModel {
         let mut raw_variance = self.initial_variance;
         out[0] = self.spot;
         for i in 0..self.steps {
-            let variance = raw_variance.max(0.0);
-            let diffusion = (variance * dt).sqrt();
             let stock_normal = normals[2 * i];
             let variance_normal = self.rho * stock_normal + rho_complement * normals[2 * i + 1];
+            let (variance, diffusion, next_raw) =
+                self.variance_step(raw_variance, dt, variance_normal);
             out[i + 1] = out[i]
                 * ((self.risk_free_rate - self.dividend_yield - 0.5 * variance) * dt
                     + diffusion * stock_normal)
                     .exp();
-            raw_variance += self.kappa * (self.theta - variance) * dt
-                + self.vol_of_vol * diffusion * variance_normal;
+            raw_variance = next_raw;
         }
     }
 }

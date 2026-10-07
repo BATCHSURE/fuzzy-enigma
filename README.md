@@ -36,6 +36,8 @@ snapshot replay, and independent Heston calibration are documented in
   single-asset GBM exotics).
 - **Geometric Asian control** with an exact discrete-fixing GBM expectation,
   and **continuous GBM single barriers** with Brownian bridge weighting.
+- **Heston European conditional Monte Carlo** with analytic integration of
+  the independent stock noise and defensive importance sampling of variance tails.
 - **Greeks** by bump-and-revalue under common random numbers.
 - **Parallel evaluation** via [`rayon`](https://crates.io/crates/rayon).
 - **Reproducible** results: path `i` draws from ChaCha20 *stream* `i` under
@@ -308,6 +310,11 @@ heston = fe.HestonModel(spot=100, r=0.03, q=0.0, v0=0.04, kappa=1.5,
                         theta=0.04, xi=0.4, rho=-0.7, t=1.0, steps=252)
 print(engine.price_european(heston, "call", 100.0))
 print(engine.price_snowball(heston, 100.0, 100.0, 0.12, 70.0, 103.0, dates))
+
+# Heston-only European estimator; default variance shifts are [0.0, -4.0, 4.0].
+print(engine.price_heston_conditional(heston, "put", 80.0))
+# Use [0.0] for conditional Monte Carlo without variance-tail shifts.
+print(engine.price_heston_conditional(heston, "put", 80.0, variance_shifts=[0.0]))
 ```
 
 `reference_spot` is the fixed initial contract fixing; barriers are absolute
@@ -317,7 +324,8 @@ exact contract variants. The structured methods have matching
 `greeks_snowball` / `greeks_phoenix` methods with the same arguments;
 scheduled Asian and continuous barrier also expose corresponding Greeks.
 Greeks, analytic controls, and continuous bridge methods require GBM and
-reject Heston with `ValueError`. All uncontrolled pricing methods accept both models.
+reject Heston with `ValueError`. Standard uncontrolled payoff pricing accepts
+both models; `price_heston_conditional` requires Heston and a European payoff.
 
 ## Optional market tools
 
@@ -345,9 +353,15 @@ The additive `fe.black_scholes_price(model, option_type, strike)` helper
 exposes the Rust closed-form GBM price for independent regression checks.
 See the [market validation guide](docs/MARKET_VALIDATION.md) for live-fetch
 examples, snapshot and curve conventions, command options, and output files.
-The guide records fit residuals and two insufficient-tail-sampling MC
-outcomes separately from core pricing checks. Its IPA overlay uses a
-labelled SDK percent/Black convention assumption, rather than response-verified units.
+The validator preserves ordinary MC results and automatically rechecks rare
+Heston tails with the conditional importance estimator and finer grids.
+The reviewed run's two missed tails now satisfy the declared sampling check;
+their original zero estimates remain in the report.
+IPA overlays require typed date/unit/model/carry evidence; ambiguous legacy
+surfaces based on SDK unit assumptions are rejected. The current account's
+typed supplier request is access-denied, so the report has no vendor overlay.
+Use `--verify-vendor-surface` with `fetch` or a live `run` to request that
+evidence when the account has the required content permission.
 
 ## Caveats
 

@@ -527,6 +527,44 @@ impl PyMcEngine {
         Ok(PyPriceResult { inner })
     }
 
+    /// Price a Heston European call/put with conditional Monte Carlo.
+    ///
+    /// The independent stock Brownian driver is integrated analytically.
+    /// By default a defensive importance-sampling mixture also samples the
+    /// variance-driver tails. Pass `variance_shifts=[0.0]` for conditional
+    /// Monte Carlo alone. Each shift is the mean of the unit-length constant
+    /// variance-driver projection, measured in standard deviations.
+    /// The full-truncation variance scheme and its grid error are retained.
+    #[pyo3(signature = (model, option_type, strike, variance_shifts = None))]
+    fn price_heston_conditional(
+        &self,
+        py: Python<'_>,
+        model: &Bound<'_, PyAny>,
+        option_type: &str,
+        strike: f64,
+        variance_shifts: Option<Vec<f64>>,
+    ) -> PyResult<PyPriceResult> {
+        let model = model
+            .extract::<PyRef<'_, PyHestonModel>>()
+            .map_err(|_| PyValueError::new_err("this method requires HestonModel"))?
+            .inner
+            .clone();
+        let payoff = EuropeanOption {
+            option_type: parse_option_type(option_type)?,
+            strike,
+        };
+        let engine = self.inner.clone();
+        let inner = py
+            .detach(move || match variance_shifts {
+                Some(shifts) => {
+                    engine.try_price_heston_conditional_with_shifts(&model, &payoff, &shifts)
+                }
+                None => engine.try_price_heston_conditional(&model, &payoff),
+            })
+            .map_err(to_py_err)?;
+        Ok(PyPriceResult { inner })
+    }
+
     /// Price an arithmetic-average Asian call/put.
     ///
     /// With `control=True` the European option at the same strike is used

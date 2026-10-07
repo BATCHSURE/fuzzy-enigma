@@ -75,6 +75,7 @@ jobs:
           . .venv/bin/activate
           python tests/test_bindings.py
           python tests/test_extensions.py
+          python tests/test_conditional.py
 
   abi3:
     # The extension is built with `abi3-py39`, so one wheel must load on
@@ -120,6 +121,7 @@ jobs:
             python$v -m pip install --quiet --force-reinstall dist/*.whl
             python$v tests/test_bindings.py
             python$v tests/test_extensions.py
+            python$v tests/test_conditional.py
           done
 
   market-and-notebooks:
@@ -138,6 +140,6 @@ jobs:
         run: |
           python -m pip install ".[market,notebooks]"
       - name: Offline market regressions
-        run: python -m unittest discover -s tests -p test_market_validation.py -v
+        run: python -m unittest discover -s tests -p 'test_market*.py' -v
       - name: Execute all notebooks in fresh kernels
         run: python tools/run_notebooks.py

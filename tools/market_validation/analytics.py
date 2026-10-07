@@ -178,6 +178,9 @@ def _vendor_surface(snapshot, as_of, diagnostics):
     if not isinstance(surface, dict) or surface.get("as_of") != as_of.isoformat() or surface.get("volatility_unit") != "decimal" or str(surface.get("convention", "")).lower() != "black":
         diagnostics.append({"code": "vendor_surface_incompatible", "reason": "same-date Black decimal-vol metadata required"})
         return None
+    if surface.get("metadata_basis") == "SDK_example_convention" or surface.get("unit_assumption") or surface.get("convention_assumption"):
+        diagnostics.append({"code": "vendor_surface_unverified", "reason": "legacy supplier unit or convention assumptions require fresh typed evidence"})
+        return None
     points = []
     for point in surface.get("points", []):
         try:
@@ -287,6 +290,7 @@ def validate_snapshot(snapshot, *, min_days=7, max_days=365, min_moneyness=0.8,
         diagnostics.append({"code": "historical_bid_ask_missing", "meaning": "No tradable interval or spread-pass conclusion for those Close observations"})
     diagnostics.append({"code": "time_convention", "value": "ACT/365F date-based EOD; exact expiry timestamp metadata is preserved"})
     return {"schema_version": 1, "accepted": accepted, "rejected": rejected, "diagnostics": diagnostics,
+            "capture_diagnostics": snapshot.get("diagnostics", {}),
             "source": source, "spot": spot, "curves": list(curves.values()),
             "vendor_surface": _vendor_surface(snapshot, as_of, diagnostics),
             "settings": {"min_days": min_days, "max_days": max_days, "min_moneyness": min_moneyness,

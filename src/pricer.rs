@@ -257,7 +257,7 @@ impl McEngine {
     /// the stream (rather than perturbing the seed) is what makes two runs
     /// at neighbouring seeds independent: `seed + 1` would otherwise just
     /// re-run this run's paths shifted by one.
-    fn fill_normals(&self, normals: &mut [f64], i: usize) {
+    pub(crate) fn fill_normals(&self, normals: &mut [f64], i: usize) {
         let mut rng = ChaCha20Rng::seed_from_u64(self.seed);
         rng.set_stream(i as u64);
         for x in normals.iter_mut() {
@@ -272,7 +272,13 @@ impl McEngine {
     /// keeps the per-path heap traffic out of the hot loop. Because each
     /// sample derives its own RNG stream from its index, the result is
     /// identical - bit for bit - whether or not `parallel` is set.
-    fn run_samples<F, T>(&self, n_samples: usize, n_steps: usize, noise_dim: usize, f: F) -> Vec<T>
+    pub(crate) fn run_samples<F, T>(
+        &self,
+        n_samples: usize,
+        n_steps: usize,
+        noise_dim: usize,
+        f: F,
+    ) -> Vec<T>
     where
         F: Fn(&mut Vec<f64>, &mut Vec<f64>, usize) -> T + Send + Sync,
         T: Send,
@@ -322,7 +328,9 @@ pub trait ControlVariate: Send + Sync {
 
 /// Validate the common model contract, including custom implementations
 /// that rely on the default model-specific validation hook.
-fn validate_model<M: PathGenerator + ?Sized>(model: &M) -> Result<(usize, usize), PricingError> {
+pub(crate) fn validate_model<M: PathGenerator + ?Sized>(
+    model: &M,
+) -> Result<(usize, usize), PricingError> {
     model.validate()?;
     let steps = model.steps();
     if steps == 0 {
@@ -397,7 +405,7 @@ impl ControlVariate for EuropeanControl {
 }
 
 /// Mean and standard error of a set of i.i.d. sample payoffs.
-fn summarise(samples: &[f64]) -> PriceResult {
+pub(crate) fn summarise(samples: &[f64]) -> PriceResult {
     let n = samples.len() as f64;
     let mean = samples.iter().sum::<f64>() / n;
     let var = if samples.len() > 1 {

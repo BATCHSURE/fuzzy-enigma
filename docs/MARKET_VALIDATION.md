@@ -6,6 +6,8 @@ Desktop-session access, the SPX close for 2026-10-06, SPXW Search discovery, nat
 
 The verified native history probe for `SPXWj132677450.U` returned the 2026-10-06 Close of 94.77 index points, bid 93.4, and ask 98.1, with delayed quote quality of service. This is evidence for that request and date, not a claim of universal option or real-time entitlements.
 
+The reviewed core comparison now resolves both previously missed Heston tails through conditional importance sampling. Supplier volatility remains unavailable: typed IPA FinancialContracts verification is access-denied on this account, and ambiguous legacy values are rejected. The saved report therefore has no vendor overlay.
+
 ## Install the optional tools
 
 Use Python 3.12 for the market workflow. The core extension's broader abi3 interpreter support does not imply that every optional market package supports the same range.
@@ -45,9 +47,17 @@ python -m tools.market_validation fetch \
   --as-of 2026-10-06 \
   --curves my_curves.csv \
   --output artifacts/spxw_2026-10-06
+
+# Optionally request typed supplier evidence when the account is entitled.
+python -m tools.market_validation fetch \
+  --as-of 2026-10-06 --verify-vendor-surface \
+  --curves my_curves.csv \
+  --output artifacts/spxw_verified_surface
 ```
 
 `fetch` performs a live SPXW request and writes `snapshot.json`. It does not accept `--snapshot`. Without `--as-of`, it targets the last published complete close. This workflow uses **Close** prices; returned dates must match the requested as-of date. A missing or mismatched historical close is not silently substituted with today's price, the latest available quote, or a current volatility surface.
+
+`--verify-vendor-surface` is an opt-in capability of `fetch` and live `run`. It requests typed supplier evidence and preserves permission/verification failures in capture diagnostics. It is rejected with `--snapshot`, so offline replay never initiates a verification request. An unsuccessful verification does not turn raw volatility values into an accepted overlay or prevent quote/curve evidence from being retained.
 
 Option history first tries the dated `TR.PriceClose` endpoint, then uses native `historical_pricing.summaries` with the daily interval and `TRDPRC_1` for instruments missing there. Each quote records its close source, and raw diagnostics retain primary-endpoint failures and fallback results. Historical bid/ask values remain tied to the same actual observation date.
 
@@ -103,7 +113,11 @@ QuantLib Black prices and a bracketed implied-volatility inversion provide the i
 
 Training and holdout observations are grouped by `(expiry, strike)`, keeping a call and put at the same strike together; every fifth sorted strike group within an expiry is held out. With a usable historical spread, price uncertainty is `max(half_spread, 0.05)` index points. Without one, the explicit Close uncertainty assumption is `max(Black_vega × 0.01, 0.05)`, using a one-volatility-point allowance and the same tick floor. The report identifies the assumed uncertainty separately from the historical-spread case.
 
-A vendor surface is shown only with matching date and compatible forward/discount inputs. Explicit provider units are normalised to decimal Black IV when supplied. For the reviewed IPA response, units/convention were not declared; the display instead records the pinned SDK's example convention as `metadata_basis="SDK_example_convention"`, `unit_assumption="percent"`, and `convention_assumption="Black for European index implied volatility"`. It also records `units_verified_by_response=false` and `independent_reference=false`. This is an explicitly assumed vendor diagnostic overlay, not independent mathematical validation or a response-verified unit claim. Missing or incompatible surfaces remain unavailable; locally inverted Close IV is not relabelled as vendor IV.
+An untyped vendor surface requires strict, same-date typed evidence before use. IPA FinancialContracts must return `VolatilityPercent`, `ExerciseStyle="EURO"`, `PricingModelType="BlackScholes"`, and `VolatilityType="SVISurface"`, with matching instrument/expiry/strike, valuation and market-data dates, underlying-price provenance, and discount/dividend carry. Returned premiums must also agree with the Black price implied by the captured spot, forward, discount factor, and typed volatility. A unit identity is accepted only when it is uniquely established by the typed values; unit conventions are never inferred from the size of a number or an SDK example.
+
+If the saved matrix cannot satisfy those checks, its values remain unverified and are rejected for overlays. A separately retrieved typed supplier dataset can use the matrix only for grid locations; its returned IV values and captured spot/carry overrides require their own verification. Supplied dated overrides are labelled as supplied inputs, not newly returned market observations. A separate typed dataset does not retroactively verify the old matrix's values. Requests, responses, coverage, tolerances, and hashes preserve the evidence for each accepted point.
+
+Legacy snapshots with `metadata_basis="SDK_example_convention"`, `unit_assumption`, or `convention_assumption` are rejected as `vendor_surface_unverified`. Missing, ambiguous, stale, or carry-incompatible supplier data remains unavailable. Verified supplier IV is a provider-model diagnostic; independent core pricing validation continues to use QuantLib, and locally inverted Close IV is not relabelled as vendor IV.
 
 ## Replay and compare offline
 
@@ -162,7 +176,28 @@ The objective is the model-price minus Close residual divided by the fixed pre-f
 
 QuantLib's analytic Heston engine prices each target with the expiry-specific equivalent flat carry derived from its supplied discount factor and forward. The report includes the chosen `parameters` (also exposed through the `params` alias), each start's objective/convergence status, training and holdout price/weighted RMSE, implied-volatility errors, and the Feller margin. The Feller condition is reported rather than imposed as an optimisation constraint. `converged`, `incomplete`, `failed`, and `insufficient_data` have distinct meanings; a finite parameter vector is not automatically a converged fit. A non-converged requested calibration gives the CLI a non-zero exit status while preserving its diagnostic report.
 
-Numerical validation samples short/middle/long expiries and low/middle/high strikes. It compares core GBM prices at a fixed 20% volatility with independent Black prices, and calibrated Heston prices with independent analytic Heston prices. It does not use each quote's inverted Close volatility as the GBM verification target. Seeds must be distinct valid u64 integers; duplicate streams cannot supply independent samples. Across the selected grids/seeds, a four-standard-error sampling check and the last-grid change are recorded separately from market-fit residuals. When a positive reference price produces no sampled payoff and a zero estimated standard error, the result is explicitly classified `insufficient_tail_sampling` rather than silently passing or establishing a code failure.
+Numerical validation samples short/middle/long expiries and low/middle/high strikes. It compares core GBM prices at a fixed 20% volatility with independent Black prices, and calibrated Heston prices with independent analytic Heston prices. It does not use each quote's inverted Close volatility as the GBM verification target. Seeds must be distinct valid u64 integers; duplicate streams cannot supply independent samples. A four-standard-error sampling check and the last-grid change are recorded separately from market-fit residuals.
+
+The additive Python API is `engine.price_heston_conditional(model, option_type, strike, variance_shifts=None)`. It returns the same `PriceResult` as ordinary pricing, requires `HestonModel` and a positive finite strike, and uses `[0.0, -4.0, 4.0]` when shifts are omitted. `[0.0]` selects pure conditional Monte Carlo. Custom shifts must be finite, distinct, include zero, and have finite squares; invalid models/parameters raise `ValueError`. The conditional estimator shares the core log-Euler/full-truncation raw-variance discretisation, so its confidence interval still measures sampling uncertainty rather than grid bias.
+
+Automatic rechecking is Heston-only. It starts when the pooled ordinary estimate is zero for a positive independent reference, or its pooled standard error divided by that reference exceeds 25%. The conditional importance estimator runs the requested grids plus `max(1024, 4 × requested_finest_steps)`, with automatic additions capped at 16,384 steps; an explicitly requested grid above the cap is preserved. One further refinement uses four times the finest-grid path budget when relative error exceeds 10%, or otherwise a fourfold grid refinement when the reference gap exceeds sampling tolerance. Original ordinary estimates and their classification remain in the output.
+
+The selected tail result requires a positive estimate for a positive reference, reference-denominated relative standard error of at most 10%, and a gap no larger than `4 × SE + 1e-12 + abs(reference) × 1e-8`. Tail references record the original 144-node quadrature, adaptive `1e-10` and `1e-12` calculations, and their differences; calibration retains its original pricing path. Records identify the estimator, shifts, reference method, and relative error; summaries retain `crude` and `tail_resolution` details, with top-level `tail_rechecks`. Ordinary and conditional estimates reuse seeds and are not combined as independent observations. A path-budget refinement is not reported as a grid change.
+
+### Rare-event verification
+
+If ordinary Heston sampling misses a positive tail price or has poor relative precision, the validator retains that result and runs the Rust core's conditional importance estimator. This integrates the independent stock noise analytically while retaining the same log-Euler stock update and full-truncation raw variance state. It changes the estimator, not the discretised model.
+
+For variance-driver normals `U_i`, define `A = sum(v_i+ * dt)` and `B = sum(sqrt(v_i+ * dt) * U_i)`. Conditional terminal log-price has mean `log(S0) + (r-q)T - A/2 + rho*B` and variance `(1-rho²)*A`; its vanilla payoff expectation is lognormal and can be calculated directly. Zero conditional variance uses discounted intrinsic value.
+
+The remaining variance-path tail uses a defensive mixture of Gaussian mean shifts `[0, -4, 4]`, spread across the time grid as `shift/sqrt(steps)`. Each shifted path receives the exact target/proposal density ratio. The zero-shift component preserves support and bounds that ratio; weights use the actual allocation among strata. Antithetic pairs count as independent samples, with a conservative pooled standard error. Setting `variance_shifts=[0.0]` selects pure conditional Monte Carlo:
+
+```python
+result = engine.price_heston_conditional(heston, "put", strike,
+                                         variance_shifts=[0.0, -4.0, 4.0])
+```
+
+The method is Heston-only. Reference quadrature is tightened independently for tiny prices; the report stores the quadrature convergence checks, original estimate, selected estimator, mixture shifts, relative standard error, and grid changes. A zero mean/zero standard error cannot verify a positive tail reference. Sampling uncertainty and time-discretisation bias remain separate acceptance criteria.
 
 ### Command options
 
@@ -179,6 +214,7 @@ Numerical validation samples short/middle/long expiries and low/middle/high stri
 | `--max-nfev 500` | Calibration objective-evaluation limit per start |
 | `--no-calibration` | Skip calibration in `run`/`report` |
 | `--no-mc` | Skip core-Monte-Carlo comparisons in `run`/`report` |
+| `--verify-vendor-surface` | Request typed IPA supplier-volatility evidence on `fetch` or live `run`; requires FinancialContracts content permission and rejects `--snapshot` |
 | `--prompt` | Permit hidden-key input for `doctor` if `LSEG_APP_KEY` is unset |
 
 There is no RIC-selection flag in this release: SPXW is the fixed profile. Run a subcommand with `--help` for its supported options.
@@ -233,15 +269,27 @@ The saved local report is `artifacts/market_validation/lseg-20261006-validated/r
 | Optimisation | Eight starts; selected fit converged |
 | Training fit | 48 targets; price RMSE 3.53048 index points |
 | Strike holdout | Ten targets; price RMSE 4.14810 index points; IV MAE 239.6 basis points |
-| Independent MC/QuantLib comparison | 126 records, 14 summaries: 12 within sampling error and two insufficient-tail-sampling outcomes |
+| Independent MC/QuantLib comparison | 150 records, 14 summaries; all satisfy the declared sampling tolerance after two conditional tail rechecks |
 | Rust closed-form/QuantLib comparison | Maximum absolute error `2.6148e-12` |
-| IPA display | 114 normalised points under the explicitly recorded SDK percent/European-Black assumption |
+| Supplier volatility | Zero verified points; no vendor overlay; 114 untyped IPA matrix points retained only as raw evidence |
+| Recorded replay time | 32.2 seconds for load, validation, calibration, and numerical validation before report generation |
 
-The fitted parameters are `v0=0.00950145813`, `kappa=8.59859584`, `theta=0.03731037892`, `xi=1.64207484`, and `rho=-0.61857426`. The holdout residuals describe market fit under the recorded curve/date assumptions; they are separate from independent pricing verification. The two tail outcomes do not justify an all-passed MC claim or, by themselves, a code-failure claim. Vendor points remain diagnostics with `units_verified_by_response=false` and `independent_reference=false`.
+The fitted parameters are `v0=0.00950145813`, `kappa=8.59859584`, `theta=0.03731037892`, `xi=1.64207484`, and `rho=-0.61857426`. The holdout residuals describe market fit under the recorded curve/date assumptions; they are separate from independent pricing verification.
+
+Both originally missed positive tails are now resolved at 4,096 steps with 100,000 paths per seed and independent seeds 42/43/44. No further fourfold path-budget or 16,384-step refinement was needed. The combined standard error is pooled across these independent seeds; relative standard error below uses the independent reference price as its denominator.
+
+| Heston tail | Conditional estimate | Combined SE | Adaptive QuantLib reference | SE / reference |
+|---|---|---|---|---|
+| Put, strike 6,300 | `2.1104146371e-5` | `9.6263293601e-8` | `2.1262144975e-5` | 0.453% |
+| Call, strike 8,600 | `9.1896610019e-6` | `5.1361816279e-7` | `8.0618988256e-6` | 6.371% |
+
+All 14 selected summaries satisfy `abs(estimate - reference) <= 4 × SE + 1e-12 + abs(reference) × 1e-8`; both tail results also meet the 10% relative-precision requirement. The original ordinary zero estimates and insufficient-tail classifications remain available under `crude`. These sampling checks do not establish zero Heston grid bias. The tail references retain the original 144-node and both adaptive quadrature checks.
+
+Actual supplier verification remains blocked by content access. Historical FinancialContracts `ImpliedYield` was unsupported; the alternative typed `HistoricalYield` request with captured spot/discount/forward overrides was access-denied for `/.SPX`. The native historical `IMP_VOLT` value 9.9341 lacks unit/model metadata; `TR.OPWCloseImpliedVolatility` was empty, and `TR.IMPLIEDVOLATILITY=9.9341` lacks unit and dated-response fields. None is accepted as verified supplier volatility. The old untyped matrix is retained as raw provenance, excluded from plots and comparisons, and diagnosed as unavailable. Resolving this remaining supplier limitation requires the account's FinancialContracts content permission and successful typed response checks.
 
 ## Regressions and notebooks
 
-All 27 offline market unit tests pass, covering filtering, date/curve alignment, independent prices, real-data Heston references and MC, calibration outputs, thin-expiry handling, duplicate seeds, evidence provenance, and unusable-data diagnostics without contacting LSEG. The committed fixtures contain six real LSEG reference cases and twelve synthetic reference cases. Synthetic fixtures are explicitly labelled and do not establish live data permissions. The Python 3.12 CI job runs market regressions and notebooks in addition to the existing core checks.
+All 42 offline market tests pass, covering filtering, date/curve alignment, independent prices, real-data Heston references and MC, conditional rare-tail resolution, strict supplier units/model/date/carry evidence, calibration outputs, thin-expiry handling, duplicate seeds, provenance, and unusable-data diagnostics without contacting LSEG. The Rust suite passes 79 tests, and the three conditional-pricing Python smoke groups pass on CPython 3.12 and 3.14 alongside the existing binding/extension smoke checks. The committed fixtures contain six real LSEG reference cases and twelve synthetic reference cases. Synthetic fixtures are explicitly labelled and do not establish live data permissions. The Python 3.12 CI job runs all `test_market*.py` regressions and notebooks in addition to the existing core checks.
 
 The checked-in [synthetic SPXW regression snapshot](../tests/fixtures/market/synthetic_spxw.json) contains explicit synthetic curves and can demonstrate offline report generation without credentials:
 
@@ -277,7 +325,7 @@ Commit only the curated source inputs and frozen golden references under `tests/
 Run offline tests with the market environment:
 
 ```sh
-python -m unittest discover -s tests -p test_market_validation.py -v
+python -m unittest discover -s tests -p 'test_market*.py' -v
 ```
 
 The worked notebooks remain [the introductory example](../notebooks/example.ipynb), [structured notes](../notebooks/structured_notes.ipynb), [numerical methods](../notebooks/numerical_methods.ipynb), and [Heston](../notebooks/heston.ipynb). All four have now rerun successfully: 18 code cells and nine PNG outputs are saved, and both the kernel-free runner and fresh Jupyter kernels pass. See the [roadmap](ROADMAP.md) for milestone status and the established pricing conventions.

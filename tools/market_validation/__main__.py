@@ -62,6 +62,9 @@ def parser():
         p.add_argument("--max-nfev", type=_positive, default=500)
         p.add_argument("--no-calibration", action="store_true")
         p.add_argument("--no-mc", action="store_true")
+        if name in {"fetch", "run"}:
+            p.add_argument("--verify-vendor-surface", action="store_true",
+                           help="Request typed IPA supplier-volatility evidence; requires FinancialContracts content access")
     return result
 
 
@@ -82,6 +85,8 @@ def main(argv=None):
             raise ValueError("fetch does not accept --snapshot; use run or validate for replay")
         if args.command == "report" and not args.snapshot:
             raise ValueError("report requires --snapshot and never connects to LSEG")
+        if args.snapshot and getattr(args, "verify_vendor_surface", False):
+            raise ValueError("--verify-vendor-surface requires live fetch; offline replay never contacts LSEG")
         if args.snapshot:
             snapshot = read_snapshot(args.snapshot)
             copy_evidence(snapshot, args.snapshot, output)
@@ -91,7 +96,8 @@ def main(argv=None):
                 snapshot["curves"] = read_curves(args.curves, snapshot["source"]["as_of"])
         else:
             from .lseg import fetch_snapshot
-            snapshot = fetch_snapshot(as_of=args.as_of, curves_path=args.curves, output=output)
+            snapshot = fetch_snapshot(as_of=args.as_of, curves_path=args.curves, output=output,
+                                      verify_vendor_surface=getattr(args, "verify_vendor_surface", False))
         snapshot["dataset_sha256"] = dataset_hash(snapshot)
         timings["load_or_fetch"] = perf_counter() - started
         snapshot["versions"] = versions()

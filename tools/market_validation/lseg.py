@@ -10,6 +10,7 @@ import csv
 import getpass
 import hashlib
 import importlib
+import json
 import math
 import os
 import re
@@ -20,7 +21,9 @@ from pathlib import Path
 
 _TERMS_SOURCE = "https://www.cboe.com/tradable-products/sp-500/spx-options/spx-specifications"
 _SURFACE_URL = "https://api.refinitiv.com/data/quantitative-analytics-curves-and-surfaces/v1/surfaces"
-_SDK_SOURCE = "https://pypi.org/project/lseg-data/2.1.1/#files"
+_CONTRACT_URL = "https://api.refinitiv.com/data/quantitative-analytics/v1/financial-contracts"
+_CONTRACT_DOC = "https://developers.lseg.com/en/api-catalog/refinitiv-data-platform/refinitiv-data-platform-apis/documentation/manuals-and-guides/ipa-financial-contracts/ipa-financial-contracts-option-contracts-eti"
+_SURFACE_DOC = "https://developers.lseg.com/en/api-catalog/refinitiv-data-platform/refinitiv-data-platform-apis/documentation/manuals-and-guides/ipa-volatility-surfaces/ipa-volatility-surfaces-eti"
 _REQUIRED_SEARCH = {
     "RIC", "OptionStub", "UnderlyingQuoteRIC", "ExpiryDate", "StrikePrice", "CallPutOption"
 }
@@ -576,91 +579,340 @@ def _interpolate_positive(points, target):
     return None, "outside_range"
 
 
-def _vendor_surface(raw, as_of, curves):
-    """Normalize explicit units or a labeled SDK assumption; never guess by size."""
-    curve_map = {curve["expiry"]: curve for curve in curves}
-    inferred_objects = set()
-    matrix_axes = {}
-    for response in _objects(raw):
-        context = response.get("request_context") or {}
-        for candidate in _objects(response.get("data", [])):
-            if context.get("y_axis"):
-                matrix_axes[id(candidate)] = context["y_axis"]
-        if context.get("as_of") != as_of.isoformat() or context.get("price_basis") != "close" or context.get("x_axis") != "Date" or context.get("y_axis") != "Strike":
+def _evidence_hash(value):
+    return hashlib.sha256(json.dumps(_safe_raw(value), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _surface_cells(raw, as_of):
+    """Only a dated, SPX Date-by-Strike matrix is eligible for verification."""
+    if not isinstance(raw, dict):
+        return []
+    context = raw.get("request_context") or {}
+    if any(context.get(key) != expected for key, expected in (
+        ("as_of", as_of.isoformat()), ("price_basis", "close"),
+        ("x_axis", "Date"), ("y_axis", "Strike"),
+    )):
+        return []
+    for obj in _objects(raw.get("data", [])):
+        matrix = obj.get("surface")
+        if not isinstance(matrix, list) or len(matrix) < 2 or not isinstance(matrix[0], list):
             continue
-        for candidate in _objects(response.get("data", [])):
-            discount_date = ((candidate.get("discountCurve") or {}).get("curveParameters") or {}).get("marketDataDate")
-            spots = candidate.get("underlyingSpot") or []
-            if isinstance(spots, dict):
-                spots = [spots]
+        curve = obj.get("discountCurve") or {}
+        observed = (curve.get("curveParameters") or {}).get("marketDataDate")
+        spots = obj.get("underlyingSpot") or []
+        if isinstance(spots, dict):
+            spots = [spots]
+        try:
+            spots = [spot for spot in spots if spot.get("instrumentCode") == ".SPX" and _date(spot.get("priceDate")) == as_of]
+            provider_date = obj.get("calculationDate", obj.get("marketDataDate"))
+            if observed is None or _date(observed) != as_of or len(spots) != 1 or (provider_date is not None and _date(provider_date) != as_of):
+                continue
+            spot = _positive(spots[0]["price"], "IPA spot")
+            if spots[0].get("timeStamp", "Close") != "Close" or spots[0].get("priceSide", "Last") != "Last":
+                continue
+        except (MarketDataError, KeyError, TypeError):
+            continue
+        dividend_type = ((obj.get("dividends") or {}).get("curveDefinition") or {}).get("type")
+        cells = []
+        for row in matrix[1:]:
+            if not isinstance(row, list) or len(row) != len(matrix[0]):
+                continue
             try:
-                dated_spot = any(isinstance(spot, dict) and spot.get("instrumentCode") == ".SPX" and spot.get("priceDate") is not None and _date(spot["priceDate"]) == as_of for spot in spots)
-                provider_date = candidate.get("calculationDate", candidate.get("marketDataDate"))
-                if discount_date is not None and _date(discount_date) == as_of and dated_spot and (provider_date is None or _date(provider_date) == as_of):
-                    inferred_objects.add(id(candidate))
+                expiry = _date(row[0])
+                if expiry <= as_of:
+                    continue
             except MarketDataError:
                 continue
+            for strike, value in zip(matrix[0][1:], row[1:]):
+                try:
+                    strike, value = _positive(strike, "surface strike"), float(value)
+                    if not math.isfinite(value) or value < 0:
+                        continue
+                except (MarketDataError, TypeError, ValueError):
+                    continue
+                cells.append({"expiry": expiry.isoformat(), "strike": strike, "surface_value": value,
+                              "spot": spot, "discount_curve_id": curve.get("marketDataId"),
+                              "dividend_type": dividend_type})
+        return cells
+    return []
+
+
+def _financial_rows(raw):
     for obj in _objects(raw):
-        fields = {_norm(key): value for key, value in obj.items()}
-        unit = str(fields.get("volatilityunit", "")).lower()
-        convention = str(fields.get("convention", fields.get("volatilityconvention", fields.get("pricingmodel", "")))).lower()
-        observed = fields.get("calculationdate", fields.get("asof", fields.get("marketdatadate")))
-        assumed = id(obj) in inferred_objects and not unit and not convention
-        if assumed:
-            # This is a displayed vendor benchmark with an explicit SDK-based
-            # convention assumption, never an independent pricing reference.
-            unit, convention, observed = "percent", "black", as_of
-        if unit not in {"decimal", "percent", "percentage"} or convention not in {"black", "blackscholes", "black-scholes"} or observed is None:
+        headers, values = obj.get("headers"), obj.get("data")
+        if not isinstance(headers, list) or not isinstance(values, list):
+            continue
+        names = [header.get("name", "") if isinstance(header, dict) else str(header) for header in headers]
+        for row in values:
+            if isinstance(row, list) and len(row) == len(names):
+                yield dict(zip(names, row))
+            elif isinstance(row, dict):
+                yield row
+
+
+def _black_call(spot, strike, expiry, as_of, discount, forward, iv):
+    t = (_date(expiry) - as_of).days / 365.0
+    sd = iv * math.sqrt(t)
+    if sd == 0:
+        return discount * max(forward - strike, 0.0)
+    d1 = math.log(forward / strike) / sd + sd / 2
+    d2 = d1 - sd
+    cdf = lambda x: .5 * math.erfc(-x / math.sqrt(2.0))
+    return discount * (forward * cdf(d1) - strike * cdf(d2))
+
+
+def _assess_surface_evidence(raw, as_of, curves, requests, responses, *, absolute_percent=1e-6, relative=1e-9, price_tolerance=0.01, typed_dataset=False):
+    """Bind typed FinancialContracts outputs to individual matrix cells.
+
+    The unit is established by numeric identity to the documented percentage
+    field, rather than by a heuristic volatility threshold. EURO and the
+    returned BlackScholes model establish the convention. A separate Black
+    price identity checks compatibility with the captured discount and forward.
+    """
+    cells = _surface_cells(raw, as_of)
+    curve_map = {curve["expiry"]: curve for curve in curves if curve.get("as_of") == as_of.isoformat()}
+    wanted = {}
+    for request in requests:
+        for instrument in request.get("universe", []):
+            definition = instrument.get("instrumentDefinition") or {}
+            wanted[definition.get("instrumentTag")] = (definition, instrument.get("pricingParameters") or {})
+    rows = {}
+    duplicates = set()
+    for response in responses:
+        for row in _financial_rows(response):
+            tag = row.get("InstrumentTag")
+            if tag in rows:
+                duplicates.add(tag)
+            rows[tag] = row
+    by_key = {(cell["expiry"], cell["strike"]): cell for cell in cells}
+    accepted, diagnostics, unit_candidates = [], [], []
+    for tag, (definition, parameters) in wanted.items():
+        try:
+            expiry, strike = _date(definition["endDate"]).isoformat(), float(definition["strike"])
+            cell = by_key[(expiry, strike)]
+            row = rows[tag]
+            if tag in duplicates:
+                raise ValueError("duplicate_response_tag")
+            error_message = str(row.get("ErrorMessage") or "").strip()
+            if row.get("ErrorCode") not in (None, 0, "0", "") or error_message:
+                raise ValueError("provider_point_error: " + str(row.get("ErrorMessage") or row.get("ErrorCode")))
+            for field, expected in (("VolatilityType", "SVISurface"), ("PricingModelType", "BlackScholes"),
+                                    ("ExerciseStyle", "EURO"), ("OptionType", "Vanilla"),
+                                    ("UnderlyingRIC", ".SPX"), ("CallPut", "Call")):
+                matches = row.get(field) == expected if field == "UnderlyingRIC" else _norm(row.get(field)) == _norm(expected)
+                if not matches:
+                    raise ValueError("unexpected_" + field)
+            for field in ("ValuationDate", "MarketDataDate"):
+                if _date(row.get(field)) != as_of:
+                    raise ValueError("date_mismatch")
+            if _date(row.get("EndDate")).isoformat() != expiry or not math.isclose(float(row["Strike"]), strike, rel_tol=1e-12, abs_tol=1e-8):
+                raise ValueError("point_mismatch")
+            if not math.isclose(float(row["UnderlyingPrice"]), cell["spot"], rel_tol=1e-12, abs_tol=1e-8):
+                raise ValueError("spot_mismatch")
+            explicit_spot = parameters.get("underlyingPrice") if typed_dataset else None
+            if explicit_spot is not None:
+                if not math.isclose(float(explicit_spot), cell["spot"], rel_tol=1e-12, abs_tol=1e-8) or _norm(row.get("UnderlyingPriceSide")) != "user":
+                    raise ValueError("captured_spot_override_not_confirmed")
+            elif _norm(row.get("UnderlyingTimeStamp")) != "close" or _norm(row.get("UnderlyingPriceSide")) != "last":
+                raise ValueError("underlying_close_not_confirmed")
+            expected_dividend_type = parameters.get("dividendType") if typed_dataset else cell.get("dividend_type")
+            if not expected_dividend_type or _norm(row.get("DividendType")) != _norm(expected_dividend_type):
+                raise ValueError("dividend_type_mismatch")
+            typed = float(row["VolatilityPercent"])
+            if not math.isfinite(typed) or typed < 0:
+                raise ValueError("invalid_typed_volatility")
+            if typed_dataset:
+                # This is a separate, fully typed supplier dataset. The
+                # untyped matrix supplies grid locations, not IV values.
+                unit = "percent"
+            else:
+                candidates = {unit for unit, factor in (("percent", 1), ("decimal", 100))
+                              if math.isclose(cell["surface_value"] * factor, typed,
+                                              rel_tol=relative, abs_tol=absolute_percent)}
+                if len(candidates) != 1:
+                    raise ValueError("unit_identity_ambiguous_or_mismatch")
+                unit = candidates.pop()
+            curve = curve_map[expiry]
+            if typed_dataset:
+                tenor = (_date(expiry) - as_of).days / 365.0
+                for field, expected in (("riskFreeRatePercent", -100 * math.log(curve["discount_factor"]) / tenor),
+                                        ("dividendYieldPercent", -100 * math.log(curve["forward"] * curve["discount_factor"] / cell["spot"]) / tenor)):
+                    if not math.isclose(float(parameters.get(field)), expected, rel_tol=1e-10, abs_tol=1e-8) or not math.isclose(float(row.get(field[0].upper() + field[1:])), expected, rel_tol=1e-10, abs_tol=1e-8):
+                        raise ValueError("carry_override_not_confirmed")
+            expected_price = _black_call(cell["spot"], strike, expiry, as_of, curve["discount_factor"], curve["forward"], typed / 100)
+            premium = float(row["MarketValueInDealCcy"])
+            if not math.isfinite(premium) or not math.isclose(premium, expected_price, rel_tol=relative, abs_tol=price_tolerance):
+                raise ValueError("carry_price_identity_mismatch")
+            accepted.append({"expiry": expiry, "strike": strike, "iv": typed / 100,
+                             "surface_value": cell["surface_value"], "typed_volatility_percent": typed,
+                             "instrument_tag": tag, "discount_factor": curve["discount_factor"], "forward": curve["forward"],
+                             "financial_contract_price": premium, "black_price": expected_price,
+                             "discount_curve_id": row.get("DiscountCurveId"), "dividend_type": row["DividendType"],
+                             "captured_dividend_type": cell["dividend_type"],
+                             "spot_basis": "explicit dated captured IPA underlyingSpot override" if explicit_spot is not None else "provider returned Close Last",
+                             "matrix_value_verified": not typed_dataset})
+            unit_candidates.append(unit)
+        except (ValueError, TypeError, KeyError, MarketDataError) as exc:
+            diagnostics.append({"instrument_tag": tag, "code": str(exc)[:100]})
+    units = set(unit_candidates)
+    if len(units) > 1:
+        diagnostics.append({"code": "inconsistent_surface_units"})
+        accepted = []
+    entire = bool(cells) and len(accepted) == len(cells)
+    return {"schema_version": 1, "method": "ipa_financial_contracts_typed_surface" if typed_dataset else "ipa_financial_contracts_typed_fields",
+            "status": "verified" if entire else "partial" if accepted else "unverified",
+            "as_of": as_of.isoformat(), "surface_sha256": _evidence_hash(raw),
+            "unit": next(iter(units)) if len(units) == 1 else None,
+            "typed_field": "VolatilityPercent", "pricing_model_type": "BlackScholes",
+            "exercise_style": "EURO", "volatility_type": "SVISurface", "price_basis": "close",
+            "matrix_values_verified": not typed_dataset and entire,
+            "dataset_basis": "FinancialContracts SVISurface on the saved matrix grid" if typed_dataset else "saved matrix matched to FinancialContracts",
+            "carry_basis": "explicit captured IPA forward/discount overrides checked against returned rates and Black premium" if typed_dataset else "Black premium identity against captured IPA forward/discount",
+            "coverage": {"total": len(cells), "requested": len(wanted), "verified": len(accepted), "entire_surface_verified": entire},
+            "tolerance": {"absolute_percent": absolute_percent, "relative": relative, "absolute_price_index_points": price_tolerance},
+            "official_sources": [_CONTRACT_DOC, _SURFACE_DOC], "points": accepted, "diagnostics": diagnostics,
+            "requests": _safe_raw(requests), "responses": _safe_raw(responses),
+            "request_sha256": _evidence_hash(requests), "response_sha256": _evidence_hash(responses)}
+
+
+def _ipa_surface_evidence(session, raw, as_of, curves, *, limit=None, typed_dataset=False, dividend_type=None):
+    """Verify all Date x Strike cells through typed IPA FinancialContracts.
+
+    Set limit for a permission probe only; a partial result labels its actual
+    coverage and never verifies the unqueried cells. No credential is recorded.
+    """
+    from lseg.data.delivery import endpoint_request
+
+    cells = _surface_cells(raw, as_of)
+    if not cells:
+        raise MarketDataError("surface_not_verifiable", "No dated SPX Date x Strike matrix is available")
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer or None")
+        # Probe near-spot points across expiries before expensive wing queries.
+        cells = sorted(cells, key=lambda cell: (abs(math.log(cell["strike"] / cell["spot"])), cell["expiry"]))[:limit]
+    fields = ["InstrumentTag", "EndDate", "Strike", "CallPut", "OptionType", "ExerciseStyle",
+              "UnderlyingRIC", "UnderlyingPrice", "UnderlyingTimeStamp", "UnderlyingPriceSide",
+              "ValuationDate", "MarketDataDate", "PricingModelType", "VolatilityType", "VolatilityPercent",
+              "DiscountCurveId", "DividendType", "RiskFreeRatePercent", "DividendYieldPercent",
+              "MarketValueInDealCcy", "YearsToExpiry", "ErrorCode", "ErrorMessage"]
+    requests, responses = [], []
+    curve_map = {curve["expiry"]: curve for curve in curves if curve.get("as_of") == as_of.isoformat()}
+    for offset in range(0, len(cells), 100):
+        universe = []
+        for index, cell in enumerate(cells[offset:offset + 100], offset):
+            if cell["expiry"] not in curve_map:
+                raise MarketDataError("surface_carry_missing", "Typed verification needs captured same-date discount and forward for every requested expiry")
+            curve = curve_map[cell["expiry"]]
+            tenor = (_date(cell["expiry"]) - as_of).days / 365.0
+            # Historical ImpliedYield retrieval can be unavailable in Financial
+            # Contracts. Explicitly carry the captured curve into this call;
+            # the returned Black price identity verifies these conventions.
+            risk_free_percent = -100 * math.log(curve["discount_factor"]) / tenor
+            dividend_percent = -100 * math.log(curve["forward"] * curve["discount_factor"] / cell["spot"]) / tenor
+            universe.append({"instrumentType": "Option", "instrumentDefinition": {
+                "instrumentTag": f"SPX-surface-{index}", "underlyingType": "Eti",
+                "underlyingDefinition": {"instrumentCode": ".SPX"}, "strike": cell["strike"],
+                "endDate": cell["expiry"], "exerciseStyle": "EURO", "callPut": "Call", "buySell": "Buy",
+                "lotSize": 1, "dealContract": 1,
+            }, "pricingParameters": {
+                "valuationDate": as_of.isoformat(), "marketDataDate": as_of.isoformat(),
+                "pricingModelType": "BlackScholes", "volatilityType": "SVISurface",
+                "optionTimeStamp": "Close", "optionPriceSide": "Last",
+                "underlyingTimeStamp": "Close", "underlyingPriceSide": "Last",
+                "dividendType": dividend_type or cell["dividend_type"], "reportCcy": "USD",
+                "riskFreeRatePercent": risk_free_percent, "dividendYieldPercent": dividend_percent,
+            }})
+            if typed_dataset:
+                # The native summary and surface entitlement can succeed even
+                # when FinancialContracts lacks its own .SPX history access.
+                # Supply the already dated captured spot; never call it a
+                # newly returned market quote in the verification metadata.
+                universe[-1]["pricingParameters"]["underlyingPrice"] = cell["spot"]
+        body = {"universe": universe, "fields": fields, "outputs": ["Data", "Headers"]}
+        requests.append(body)
+        response = endpoint_request.Definition(url=_CONTRACT_URL, method="POST", body_parameters=body).get_data(session=session)
+        _check_response(response, "IPA typed surface verification")
+        responses.append(_safe_raw(getattr(getattr(response, "data", None), "raw", None)))
+    return _assess_surface_evidence(raw, as_of, curves, requests, responses, typed_dataset=typed_dataset)
+
+
+def _ipa_surface_list_probe(session, raw, as_of, *, limit=None):
+    """Request the exact saved grid in List format to discover typed headers.
+
+    This is evidence collection only: no unit or pricing convention is inferred
+    from an unspecified header. Surface parameters match the matrix request.
+    """
+    from lseg.data.delivery import endpoint_request
+
+    cells = _surface_cells(raw, as_of)
+    if not cells:
+        raise MarketDataError("surface_not_verifiable", "No dated SPX Date x Strike matrix is available")
+    if limit is not None:
+        cells = sorted(cells, key=lambda cell: (abs(math.log(cell["strike"] / cell["spot"])), cell["expiry"]))[:limit]
+    body = {
+        "outputs": ["DiscountCurve", "ForwardCurve", "Dividends", "UnderlyingSpot"],
+        "universe": [{"underlyingType": "Eti", "surfaceTag": "SPXW-EOD-validation",
+                      "underlyingDefinition": {"instrumentCode": ".SPX"},
+                      "surfaceParameters": {"calculationDate": as_of.isoformat(), "timeStamp": "Close",
+                                            "priceSide": "Last", "inputVolatilityType": "Implied",
+                                            "volatilityModel": "SVI", "xAxis": "Date", "yAxis": "Strike",
+                                            "usePriceFallbackLogic": False},
+                      "surfaceLayout": {"format": "List", "dataPoints": [
+                          {"x": cell["expiry"], "y": str(cell["strike"])} for cell in cells]}}],
+    }
+    response = endpoint_request.Definition(url=_SURFACE_URL, method="POST", body_parameters=body).get_data(session=session)
+    _check_response(response, "IPA exact-grid List metadata probe")
+    value = _safe_raw(getattr(getattr(response, "data", None), "raw", None))
+    return {"request": body, "response": value, "request_sha256": _evidence_hash(body),
+            "response_sha256": _evidence_hash(value), "matrix_sha256": _evidence_hash(raw),
+            "as_of": as_of.isoformat(), "official_source": _SURFACE_DOC}
+
+
+def _vendor_surface(raw, as_of, curves, *, verification=None):
+    """Only explicit provider metadata or replayable typed evidence is accepted."""
+    if verification is not None:
+        if verification.get("as_of") != as_of.isoformat() or verification.get("surface_sha256") != _evidence_hash(raw):
+            return None
+        if _evidence_hash(verification.get("requests", [])) != verification.get("request_sha256") or _evidence_hash(verification.get("responses", [])) != verification.get("response_sha256"):
+            return None
+        tolerance = verification.get("tolerance") or {}
+        # Recompute from preserved typed outputs; do not trust supplied flags.
+        evidence = _assess_surface_evidence(raw, as_of, curves, verification.get("requests", []), verification.get("responses", []),
+                                          absolute_percent=min(float(tolerance.get("absolute_percent", 1e-6)), 1e-6),
+                                          relative=min(float(tolerance.get("relative", 1e-9)), 1e-9),
+                                          price_tolerance=min(float(tolerance.get("absolute_price_index_points", .01)), .01),
+                                          typed_dataset=verification.get("method") == "ipa_financial_contracts_typed_surface")
+        if not evidence["points"]:
+            return None
+        summary = {key: value for key, value in evidence.items() if key not in {"requests", "responses", "points"}}
+        return {"as_of": as_of.isoformat(), "volatility_unit": "decimal", "convention": "black",
+                "points": [{key: point[key] for key in ("expiry", "strike", "iv", "forward", "discount_factor")} for point in evidence["points"]],
+                "metadata_basis": "IPA_typed_fields_verification", "source": "LSEG IPA FinancialContracts SVISurface" if evidence["method"] == "ipa_financial_contracts_typed_surface" else "LSEG IPA", "independent_reference": False,
+                "units_verified_by_response": True, "verification": summary}
+    # Some future provider schema may return fully explicit point metadata.
+    for obj in _objects(raw):
+        if str(obj.get("volatilityUnit", "")).lower() not in {"decimal", "percent", "percentage"} or str(obj.get("convention", "")).lower() not in {"black", "blackscholes"}:
             continue
         try:
-            if _date(observed) != as_of:
+            if _date(obj.get("as_of", obj.get("calculationDate"))) != as_of:
                 continue
         except MarketDataError:
             continue
-        divisor = 100.0 if unit in {"percent", "percentage"} else 1.0
         points = []
-        candidates = obj.get("points", [])
-        matrix = obj.get("surface")
-        if isinstance(matrix, list) and len(matrix) > 1 and isinstance(matrix[0], list):
-            if matrix_axes.get(id(obj), "Strike") != "Strike":
-                continue
-            candidates = []
-            for row in matrix[1:]:
-                if not isinstance(row, list) or len(row) != len(matrix[0]):
-                    continue
-                for column, iv in zip(matrix[0][1:], row[1:]):
-                    # Matrix axes must be the requested Date x Strike, or an
-                    # explicitly recognizable transposition of those axes.
-                    try:
-                        expiry, strike = _date(row[0]), _positive(column, "vendor strike")
-                    except MarketDataError:
-                        try:
-                            expiry, strike = _date(column), _positive(row[0], "vendor strike")
-                        except MarketDataError:
-                            continue
-                    candidates.append({"expiry": expiry.isoformat(), "strike": strike, "iv": iv})
-        for point in candidates:
-            if not isinstance(point, dict):
-                continue
+        divisor = 1 if obj["volatilityUnit"].lower() == "decimal" else 100
+        for point in obj.get("points", []):
             try:
                 expiry = _date(point["expiry"]).isoformat()
-                strike = _positive(point["strike"], "vendor strike")
-                iv = float(point["iv"]) / divisor
-                if not math.isfinite(iv) or iv < 0 or _date(expiry) <= as_of:
+                value = float(point["iv"]) / divisor
+                if not math.isfinite(value) or value < 0 or _date(expiry) <= as_of:
                     continue
+                points.append({"expiry": expiry, "strike": _positive(point["strike"], "vendor strike"), "iv": value})
             except (MarketDataError, KeyError, TypeError, ValueError):
                 continue
-            normalized = {"expiry": expiry, "strike": strike, "iv": iv}
-            # Attach carry only when it came from this IPA response, allowing
-            # the reporting layer to verify compatibility with supplied CSV.
-            if expiry in curve_map:
-                normalized.update({name: curve_map[expiry][name] for name in ("forward", "discount_factor")})
-            points.append(normalized)
         if points:
-            result = {"as_of": as_of.isoformat(), "volatility_unit": "decimal", "convention": "black", "points": points, "metadata_basis": "SDK_example_convention" if assumed else "explicit_provider_response", "source": "LSEG IPA", "independent_reference": False, "units_verified_by_response": not assumed}
-            if assumed:
-                result.update({"unit_assumption": "percent", "convention_assumption": "Black for European index implied volatility", "convention_source": _SDK_SOURCE, "convention_source_module": "lseg.data.content.ipa.surfaces._surfaces_data_provider.parse_axis docstring, lseg-data 2.1.1"})
-            return result
+            return {"as_of": as_of.isoformat(), "volatility_unit": "decimal", "convention": "black", "points": points,
+                    "metadata_basis": "explicit_provider_response", "source": "LSEG IPA", "units_verified_by_response": True, "independent_reference": False}
     return None
 
 
@@ -710,10 +962,12 @@ def doctor(*, prompt=False):
     return report
 
 
-def fetch_snapshot(*, as_of=None, curves_path=None, min_days=7, max_days=365, output=None):
+def fetch_snapshot(*, as_of=None, curves_path=None, min_days=7, max_days=365, output=None, verify_vendor_surface=False):
     """Capture historical SPXW closes and preserve a needs_curves snapshot if needed."""
     if isinstance(min_days, bool) or isinstance(max_days, bool) or not isinstance(min_days, int) or not isinstance(max_days, int) or not 1 <= min_days <= max_days <= 3650:
         raise MarketDataError("invalid_expiry_window", "Expiry bounds must be integers with 1 <= min_days <= max_days <= 3650")
+    if not isinstance(verify_vendor_surface, bool):
+        raise ValueError("verify_vendor_surface must be a boolean")
     with _desktop() as (session, ld, key):
         observed, spot, spot_raw = _underlying_close(session, as_of)
         names = _search_metadata(session)
@@ -735,8 +989,18 @@ def fetch_snapshot(*, as_of=None, curves_path=None, min_days=7, max_days=365, ou
                     diagnostics["forward_ipa"] = _diagnostic(exc, key)
         except Exception as exc:
             diagnostics["ipa"] = _diagnostic(exc, key)
-        vendor_surface = _vendor_surface(ipa_raw, observed, curves) if ipa_raw is not None else None
-        diagnostics["vendor_surface"] = {"status": "ok" if vendor_surface else "unavailable", "metadata_basis": vendor_surface.get("metadata_basis") if vendor_surface else None, "message": "No compatible same-date vendor surface" if not vendor_surface else "Displayed vendor benchmark; inspect convention assumptions before comparison"}
+        verification, vendor_surface = None, None
+        if ipa_raw is not None and verify_vendor_surface:
+            try:
+                verification = _ipa_surface_evidence(session, ipa_raw, observed, curves, typed_dataset=True, dividend_type="HistoricalYield")
+                vendor_surface = _vendor_surface(ipa_raw, observed, curves, verification=verification)
+                diagnostics["vendor_surface_verification"] = {"status": verification["status"], "coverage": verification["coverage"], "diagnostics": verification["diagnostics"]}
+            except Exception as exc:
+                diagnostics["vendor_surface_verification"] = _diagnostic(exc, key)
+        elif ipa_raw is not None:
+            vendor_surface = _vendor_surface(ipa_raw, observed, curves)
+            diagnostics["vendor_surface_verification"] = {"status": "not_requested", "message": "Typed FinancialContracts verification is optional and requires its own content access; enable verify_vendor_surface to capture evidence"}
+        diagnostics["vendor_surface"] = {"status": "ok" if vendor_surface else "unavailable", "metadata_basis": vendor_surface.get("metadata_basis") if vendor_surface else None, "message": "No compatible verified same-date vendor surface" if not vendor_surface else "Supplier curve verified through typed FinancialContracts responses; inspect coverage"}
         if curves_path is not None:
             curves = _read_curves(curves_path, observed, expiries)
         complete_curves = {item["expiry"] for item in curves} >= expiries
@@ -758,7 +1022,7 @@ def fetch_snapshot(*, as_of=None, curves_path=None, min_days=7, max_days=365, ou
             },
             "spot": spot, "curves": curves, "quotes": quotes, "vendor_surface": vendor_surface,
             "diagnostics": diagnostics,
-            "raw_responses": {"underlying_close": spot_raw, "search_contracts": [item["search_metadata"] for item in contracts], "option_closes": quote_raw, "ipa": ipa_raw, "forward_ipa": forward_raw},
+            "raw_responses": {"underlying_close": spot_raw, "search_contracts": [item["search_metadata"] for item in contracts], "option_closes": quote_raw, "ipa": ipa_raw, "forward_ipa": forward_raw, "vendor_surface_verification": verification},
         }
     if output is not None:
         path = Path(output)
