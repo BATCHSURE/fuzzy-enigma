@@ -63,7 +63,7 @@ fn conditioned_sample(
     let mut integrated_variance = 0.0;
     let mut correlated_log_noise = 0.0;
     let mut terminal_driver = 0.0;
-    for pair in normals.chunks_exact(2) {
+    for pair in normals.as_chunks::<2>().0 {
         let u = noise_sign * (model.rho * pair[0] + rho_complement * pair[1]) + shift * direction;
         let (variance, diffusion, next_raw) = model.variance_step(raw, dt, u);
         integrated_variance += variance * dt;
