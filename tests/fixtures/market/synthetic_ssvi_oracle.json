@@ -1,0 +1,1044 @@
+{
+  "schema_version": 1,
+  "provider": "Synthetic",
+  "as_of": "2026-10-06",
+  "rho": -0.55,
+  "eta": 0.85,
+  "spot": 100.0,
+  "r": 0.03,
+  "q": 0.01,
+  "nodes": [
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "theta": 0.005
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "theta": 0.013
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "theta": 0.026
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "theta": 0.052
+    }
+  ],
+  "curves": [
+    {
+      "as_of": "2026-10-06",
+      "expiry": "2026-11-05",
+      "discount_factor": 0.997537284048252,
+      "forward": 100.1645187454837,
+      "source": "Synthetic explicit flat r=0.03, q=0.01"
+    },
+    {
+      "as_of": "2026-10-06",
+      "expiry": "2027-01-04",
+      "discount_factor": 0.9926300321180352,
+      "forward": 100.49436867427292,
+      "source": "Synthetic explicit flat r=0.03, q=0.01"
+    },
+    {
+      "as_of": "2026-10-06",
+      "expiry": "2027-04-04",
+      "discount_factor": 0.9853143806626516,
+      "forward": 100.99118135240688,
+      "source": "Synthetic explicit flat r=0.03, q=0.01"
+    },
+    {
+      "as_of": "2026-10-06",
+      "expiry": "2027-10-01",
+      "discount_factor": 0.9708444287406248,
+      "forward": 101.99218710954734,
+      "source": "Synthetic explicit flat r=0.03, q=0.01"
+    }
+  ],
+  "coverage": [
+    {
+      "k": -0.18,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": -0.135,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": -0.09,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": -0.044999999999999984,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": 0.0,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": 0.044999999999999984,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": 0.09000000000000002,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": 0.135,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": 0.18,
+      "t": 0.0821917808219178
+    },
+    {
+      "k": -0.18,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": -0.135,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": -0.09,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": -0.044999999999999984,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.0,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.044999999999999984,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.09000000000000002,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.135,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.18,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": -0.18,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": -0.135,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": -0.09,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": -0.044999999999999984,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.0,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.044999999999999984,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.09000000000000002,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.135,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.18,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": -0.18,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": -0.135,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": -0.09,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": -0.044999999999999984,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": 0.0,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": 0.044999999999999984,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": 0.09000000000000002,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": 0.135,
+      "t": 0.9863013698630136
+    },
+    {
+      "k": 0.18,
+      "t": 0.9863013698630136
+    }
+  ],
+  "generator": {
+    "library": "QuantLib",
+    "version": "1.40",
+    "engine": "SviSmileSection",
+    "svi_parameter_order": [
+      "a",
+      "b",
+      "sigma",
+      "rho",
+      "m"
+    ],
+    "mapping_source": "https://github.com/lballabio/QuantLib/blob/master/ql/experimental/volatility/sviinterpolation.hpp",
+    "ssvi_phi": "eta/sqrt(theta*(1+theta)); gamma=1/2",
+    "regeneration": "python tests/test_market_vol_surface.py --generate-fixtures"
+  },
+  "cases": [
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": -3.0,
+      "strike": 4.986897742815587,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": true,
+      "expected_total_variance": 0.14329279640206172,
+      "expected_iv": 1.3203771012700947,
+      "expected_call_price": 94.94322555717542,
+      "expected_put_price": 1.1568379742448276e-15
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": -1.0,
+      "strike": 36.84846718129501,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": true,
+      "expected_total_variance": 0.050409088191098364,
+      "expected_iv": 0.7831414769961407,
+      "expected_call_price": 63.1601338674129,
+      "expected_put_price": 1.1753413024117856e-05
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": -0.14,
+      "strike": 87.07884926614432,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": false,
+      "expected_total_variance": 0.010758403334077965,
+      "expected_iv": 0.36179263015059043,
+      "expected_call_price": 13.448479998448942,
+      "expected_put_price": 0.3950368060756255
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": -0.07,
+      "strike": 93.3927782521425,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": false,
+      "expected_total_variance": 0.00770676347518387,
+      "expected_iv": 0.30621172786391404,
+      "expected_call_price": 7.777348141351036,
+      "expected_put_price": 1.0222845213438931
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": 0.0,
+      "strike": 100.1645187454837,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": false,
+      "expected_total_variance": 0.005,
+      "expected_iv": 0.24664414311581237,
+      "expected_call_price": 2.818043178436315,
+      "expected_put_price": 2.818043178436315
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": 0.07,
+      "strike": 107.4272658259226,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": false,
+      "expected_total_variance": 0.003555558574959541,
+      "expected_iv": 0.20798869198911052,
+      "expected_call_price": 0.36497050249232454,
+      "expected_put_price": 7.6098314998426995
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": 0.14,
+      "strike": 115.2166214880735,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": false,
+      "expected_total_variance": 0.003702022336694147,
+      "expected_iv": 0.21222929054000092,
+      "expected_call_price": 0.023798567740392077,
+      "expected_put_price": 15.038832256798665
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": 1.0,
+      "strike": 272.2753911621937,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": true,
+      "expected_total_variance": 0.014690840668524384,
+      "expected_iv": 0.42277483542312055,
+      "expected_call_price": 1.854055695905916e-16,
+      "expected_put_price": 171.68701222574015
+    },
+    {
+      "expiry": "2026-11-05",
+      "t": 0.0821917808219178,
+      "k": 3.0,
+      "strike": 2011.8581396557363,
+      "forward": 100.1645187454837,
+      "discount_factor": 0.997537284048252,
+      "allow_wing": true,
+      "expected_total_variance": 0.04161881479550515,
+      "expected_iv": 0.7115913480914773,
+      "expected_call_price": 1.8229934127396352e-48,
+      "expected_put_price": 1906.9856625351817
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": -3.0,
+      "strike": 4.995102124420623,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": true,
+      "expected_total_variance": 0.1936779667360402,
+      "expected_iv": 1.0854527308812567,
+      "expected_call_price": 94.86522208993718,
+      "expected_put_price": 6.284141921394909e-12
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": -1.0,
+      "strike": 36.90908981723165,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": true,
+      "expected_total_variance": 0.06935557537858794,
+      "expected_iv": 0.6495483689095652,
+      "expected_call_price": 63.10850364970777,
+      "expected_put_price": 0.00027263681139002275
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": -0.14,
+      "strike": 87.22211029653865,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": false,
+      "expected_total_variance": 0.01651505186031635,
+      "expected_iv": 0.3169646123522169,
+      "expected_call_price": 13.879804430457265,
+      "expected_put_price": 0.8370856875905783
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": -0.07,
+      "strike": 93.54642687929532,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": false,
+      "expected_total_variance": 0.012530143184986913,
+      "expected_iv": 0.2760888221364103,
+      "expected_call_price": 8.494318584581332,
+      "expected_put_price": 1.7448047905962674
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": 0.0,
+      "strike": 100.32930815514358,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": false,
+      "expected_total_variance": 0.008999999999999998,
+      "expected_iv": 0.2339871791359518,
+      "expected_call_price": 3.7770660182299767,
+      "expected_put_price": 3.7770660182299753
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": 0.07,
+      "strike": 107.60400381596688,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": false,
+      "expected_total_variance": 0.006727772274508535,
+      "expected_iv": 0.20230492168158834,
+      "expected_call_price": 0.9264291748909947,
+      "expected_put_price": 8.165337938428161
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": 0.14,
+      "strike": 115.40617442833441,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": false,
+      "expected_total_variance": 0.006309499144084525,
+      "expected_iv": 0.19591525325978967,
+      "expected_call_price": 0.1332774963112078,
+      "expected_put_price": 15.135975132094837
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": 1.0,
+      "strike": 272.7233352199947,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": true,
+      "expected_total_variance": 0.020274510471600445,
+      "expected_iv": 0.351193116915612,
+      "expected_call_price": 3.4801513044571672e-12,
+      "expected_put_price": 171.54595758855527
+    },
+    {
+      "expiry": "2026-12-05",
+      "t": 0.1643835616438356,
+      "k": 3.0,
+      "strike": 2015.16802342801,
+      "forward": 100.32930815514358,
+      "discount_factor": 0.9950806330663632,
+      "allow_wing": true,
+      "expected_total_variance": 0.056272270646131065,
+      "expected_iv": 0.5850837373948826,
+      "expected_call_price": 4.8087884186771973e-36,
+      "expected_put_price": 1905.4189210137054
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": -3.0,
+      "strike": 5.003320003771351,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": true,
+      "expected_total_variance": 0.23405118640546668,
+      "expected_iv": 0.9742728515724224,
+      "expected_call_price": 94.78728270923645,
+      "expected_put_price": 4.516080880538975e-10
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": -1.0,
+      "strike": 36.96981218876842,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": true,
+      "expected_total_variance": 0.08498466652924323,
+      "expected_iv": 0.5870775387286663,
+      "expected_call_price": 63.05772798597841,
+      "expected_put_price": 0.0013454414881315772
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": -0.14,
+      "strike": 87.36560701818294,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": false,
+      "expected_total_variance": 0.021863803684026826,
+      "expected_iv": 0.29777486545430765,
+      "expected_call_price": 14.296505664897621,
+      "expected_put_price": 1.264502560542986
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": -0.07,
+      "strike": 93.700328287242,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": false,
+      "expected_total_variance": 0.01716864588142909,
+      "expected_iv": 0.2638719333043887,
+      "expected_call_price": 9.107024304354962,
+      "expected_put_price": 2.363055776765237
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": 0.0,
+      "strike": 100.49436867427292,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": false,
+      "expected_total_variance": 0.013,
+      "expected_iv": 0.22961320132392699,
+      "expected_call_price": 4.534983246442557,
+      "expected_put_price": 4.5349832464425575
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": 0.07,
+      "strike": 107.78103257313516,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": false,
+      "expected_total_variance": 0.010078830040148536,
+      "expected_iv": 0.20217629723294622,
+      "expected_call_price": 1.4876864491132558,
+      "expected_put_price": 8.720647869074217
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": 0.14,
+      "strike": 115.59603921871467,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": false,
+      "expected_total_variance": 0.009076819144115547,
+      "expected_iv": 0.19186334800240204,
+      "expected_call_price": 0.31987270643291005,
+      "expected_put_price": 15.31024442399811
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": 1.0,
+      "strike": 273.17201622974,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": true,
+      "expected_total_variance": 0.024919859724720498,
+      "expected_iv": 0.31790545064571535,
+      "expected_call_price": 4.6416316504300906e-10,
+      "expected_put_price": 171.40501883951424
+    },
+    {
+      "expiry": "2027-01-04",
+      "t": 0.2465753424657534,
+      "k": 3.0,
+      "strike": 2018.483352579543,
+      "forward": 100.49436867427292,
+      "discount_factor": 0.9926300321180352,
+      "allow_wing": true,
+      "expected_total_variance": 0.06802601749580955,
+      "expected_iv": 0.5252459358980799,
+      "expected_call_price": 6.3639653982107e-30,
+      "expected_put_price": 1903.8534666959258
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": -3.0,
+      "strike": 5.011551403074092,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": true,
+      "expected_total_variance": 0.2715456398917508,
+      "expected_iv": 0.9088186405094301,
+      "expected_call_price": 94.70940736898694,
+      "expected_put_price": 7.901546133118126e-09
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": -1.0,
+      "strike": 37.03063445998908,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": true,
+      "expected_total_variance": 0.09985305941730051,
+      "expected_iv": 0.5511077230399598,
+      "expected_call_price": 63.008565952986004,
+      "expected_put_price": 0.0039892792305926215
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": -0.14,
+      "strike": 87.50933981883351,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": false,
+      "expected_total_variance": 0.027411355324626508,
+      "expected_iv": 0.2887493823007632,
+      "expected_call_price": 14.723294340972897,
+      "expected_put_price": 1.7019980713746914
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": -0.07,
+      "strike": 93.8544828918543,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": false,
+      "expected_total_variance": 0.022081254233765862,
+      "expected_iv": 0.25915982512927777,
+      "expected_call_price": 9.692908128283783,
+      "expected_put_price": 2.9544803112086964
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": 0.0,
+      "strike": 100.65970074889763,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": false,
+      "expected_total_variance": 0.017333333333333333,
+      "expected_iv": 0.22961320132392699,
+      "expected_call_price": 5.231301204518284,
+      "expected_put_price": 5.231301204518284
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": 0.07,
+      "strike": 107.9583525757939,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": false,
+      "expected_total_variance": 0.013822678340078744,
+      "expected_iv": 0.2050462873379395,
+      "expected_call_price": 2.060450576075868,
+      "expected_put_price": 9.287469538679893
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": 0.14,
+      "strike": 115.78621637226618,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": false,
+      "expected_total_variance": 0.012230201873953002,
+      "expected_iv": 0.1928735268682746,
+      "expected_call_price": 0.5778006669793083,
+      "expected_put_price": 15.555856593055527
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": 1.0,
+      "strike": 273.62143540385375,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": true,
+      "expected_total_variance": 0.0293777846159305,
+      "expected_iv": 0.29892712858954207,
+      "expected_call_price": 1.2321158924509867e-08,
+      "expected_put_price": 171.26419589434505
+    },
+    {
+      "expiry": "2027-02-03",
+      "t": 0.3287671232876712,
+      "k": 3.0,
+      "strike": 2021.8041360690047,
+      "forward": 100.65970074889763,
+      "discount_factor": 0.9901854663037541,
+      "allow_wing": true,
+      "expected_total_variance": 0.07895338474026778,
+      "expected_iv": 0.4900508938722397,
+      "expected_call_price": 7.490758495937401e-26,
+      "expected_put_price": 1902.2892985243025
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": -3.0,
+      "strike": 5.0280548505436276,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": true,
+      "expected_total_variance": 0.335027535925694,
+      "expected_iv": 0.8242338213721689,
+      "expected_call_price": 94.55384879937775,
+      "expected_put_price": 2.437426663273115e-07
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": -1.0,
+      "strike": 37.152579359167234,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": true,
+      "expected_total_variance": 0.12579952807748201,
+      "expected_iv": 0.5050678048445076,
+      "expected_call_price": 62.916150187387544,
+      "expected_put_price": 0.015057602049102895
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": -0.14,
+      "strike": 87.79751521136923,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": false,
+      "expected_total_variance": 0.03806291942650069,
+      "expected_iv": 0.27781854180454585,
+      "expected_call_price": 15.503238001764256,
+      "expected_put_price": 2.5033290193379445
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": -0.07,
+      "strike": 94.16355335798502,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": false,
+      "expected_total_variance": 0.031702911383234285,
+      "expected_iv": 0.25354774539281677,
+      "expected_call_price": 10.70284286207234,
+      "expected_put_price": 3.9754828133535844
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": 0.0,
+      "strike": 100.99118135240688,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": false,
+      "expected_total_variance": 0.026000000000000006,
+      "expected_iv": 0.229613201323927,
+      "expected_call_price": 6.394178144630784,
+      "expected_put_price": 6.394178144630782
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": 0.07,
+      "strike": 108.31386823498465,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": false,
+      "expected_total_variance": 0.02151756838872925,
+      "expected_iv": 0.20888476969486972,
+      "expected_call_price": 3.0935533324351967,
+      "expected_put_price": 10.308702022928827
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": 0.14,
+      "strike": 116.16750982531225,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": false,
+      "expected_total_variance": 0.018893152831174428,
+      "expected_iv": 0.19573225452953535,
+      "expected_call_price": 1.1778757546911678,
+      "expected_put_price": 16.131330444704872
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": 1.0,
+      "strike": 274.5224931048596,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": true,
+      "expected_total_variance": 0.037261283005342836,
+      "expected_iv": 0.2748774302297716,
+      "expected_call_price": 6.306969590019354e-07,
+      "expected_put_price": 170.98289759564244
+    },
+    {
+      "expiry": "2027-04-04",
+      "t": 0.4931506849315068,
+      "k": 3.0,
+      "strike": 2028.4621019701103,
+      "forward": 100.99118135240688,
+      "discount_factor": 0.9853143806626516,
+      "allow_wing": true,
+      "expected_total_variance": 0.09748543550500641,
+      "expected_iv": 0.44461084081929536,
+      "expected_call_price": 5.166830900376828e-21,
+      "expected_put_price": 1899.1648163937034
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": -3.0,
+      "strike": 5.052911978649975,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": true,
+      "expected_total_variance": 0.4136222834782347,
+      "expected_iv": 0.7477673768540877,
+      "expected_call_price": 94.32099344192825,
+      "expected_put_price": 4.157430299719236e-06
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": -1.0,
+      "strike": 37.33625007320334,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": true,
+      "expected_total_variance": 0.15926695250578118,
+      "expected_iv": 0.46401004804178675,
+      "expected_call_price": 62.79271101514933,
+      "expected_put_price": 0.046525953903172046
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": -0.14,
+      "strike": 88.23155862336425,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": false,
+      "expected_total_variance": 0.05341567166997563,
+      "expected_iv": 0.2687193232072585,
+      "expected_call_price": 16.529411689225018,
+      "expected_put_price": 3.561517790021014
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": -0.07,
+      "strike": 94.62906846836917,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": false,
+      "expected_total_variance": 0.04584565721681085,
+      "expected_iv": 0.24895087187618156,
+      "expected_call_price": 11.96344057835757,
+      "expected_put_price": 5.25264810654394
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": 0.0,
+      "strike": 101.49045011679134,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": false,
+      "expected_total_variance": 0.039,
+      "expected_iv": 0.22961320132392699,
+      "expected_call_price": 7.807725029688477,
+      "expected_put_price": 7.807725029688477
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": 0.07,
+      "strike": 108.84933806943167,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": false,
+      "expected_total_variance": 0.03335450670435367,
+      "expected_iv": 0.21234488846187355,
+      "expected_call_price": 4.426692451932558,
+      "expected_put_price": 11.624072280651875
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": 0.14,
+      "strike": 116.7418056035715,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": false,
+      "expected_total_variance": 0.029465261299702592,
+      "expected_iv": 0.19958123171606507,
+      "expected_call_price": 2.132324752073293,
+      "expected_put_price": 17.04895333068816
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": 1.0,
+      "strike": 275.87964631460306,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": true,
+      "expected_total_variance": 0.047656606575362054,
+      "expected_iv": 0.25382015651220124,
+      "expected_call_price": 1.656120575213831e-05,
+      "expected_put_price": 170.56183121831958
+    },
+    {
+      "expiry": "2027-07-03",
+      "t": 0.7397260273972602,
+      "k": 3.0,
+      "strike": 2038.4901831717486,
+      "forward": 101.49045011679134,
+      "discount_factor": 0.9780526453235299,
+      "allow_wing": true,
+      "expected_total_variance": 0.12049521089769415,
+      "expected_iv": 0.40359840682456527,
+      "expected_call_price": 4.72247476528539e-17,
+      "expected_put_price": 1894.4877129053718
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": -3.0,
+      "strike": 5.077891992611005,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": true,
+      "expected_total_variance": 0.4804660373357242,
+      "expected_iv": 0.697953563457602,
+      "expected_call_price": 94.08872650363867,
+      "expected_put_price": 2.3024036284892553e-05
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": -1.0,
+      "strike": 37.52082879771346,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": true,
+      "expected_total_variance": 0.1889043628106384,
+      "expected_iv": 0.43763916017232934,
+      "expected_call_price": 62.68519533593799,
+      "expected_put_price": 0.09353630555348234
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": -0.14,
+      "strike": 88.66774781002091,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": false,
+      "expected_total_variance": 0.06833746025953776,
+      "expected_iv": 0.26322346333872165,
+      "expected_call_price": 17.430371174797248,
+      "expected_put_price": 4.494413514759382
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": -0.07,
+      "strike": 95.09688493963307,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": false,
+      "expected_total_variance": 0.05978607198609204,
+      "expected_iv": 0.2462040497169167,
+      "expected_call_price": 13.033138563353127,
+      "expected_put_price": 6.338872867208713
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": 0.0,
+      "strike": 101.99218710954734,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": false,
+      "expected_total_variance": 0.05200000000000001,
+      "expected_iv": 0.229613201323927,
+      "expected_call_price": 8.988518756464117,
+      "expected_put_price": 8.988518756464112
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": 0.07,
+      "strike": 109.38745509900038,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": false,
+      "expected_total_variance": 0.04539649882984472,
+      "expected_iv": 0.2145390541557341,
+      "expected_call_price": 5.579100747643875,
+      "expected_put_price": 12.75875547424824
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": 0.14,
+      "strike": 117.31894052025616,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": false,
+      "expected_total_variance": 0.040465023712571706,
+      "expected_iv": 0.2025513217206984,
+      "expected_call_price": 3.0644469906949614,
+      "expected_put_price": 17.944340150162994
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": 1.0,
+      "strike": 277.2435088646774,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": true,
+      "expected_total_variance": 0.057108170345357,
+      "expected_iv": 0.24062697142658676,
+      "expected_call_price": 0.00012030867781611377,
+      "expected_put_price": 170.1418896640765
+    },
+    {
+      "expiry": "2027-10-01",
+      "t": 0.9863013698630136,
+      "k": 3.0,
+      "strike": 2048.5678400654783,
+      "forward": 101.99218710954734,
+      "discount_factor": 0.9708444287406248,
+      "allow_wing": true,
+      "expected_total_variance": 0.14013502980374515,
+      "expected_iv": 0.37693679796768387,
+      "expected_call_price": 1.0988992359495713e-14,
+      "expected_put_price": 1889.8221277944094
+    }
+  ]
+}

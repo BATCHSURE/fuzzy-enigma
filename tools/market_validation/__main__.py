@@ -37,31 +37,47 @@ def _seed_sequence(value):
     return result
 
 
+def _seed(value):
+    result = int(value)
+    if not 0 <= result < 2**64:
+        raise argparse.ArgumentTypeError("Seed must be an unsigned 64-bit integer")
+    return result
+
+
 def parser():
     result = argparse.ArgumentParser(description="SPXW EOD validation, IV surfaces and Heston calibration")
     commands = result.add_subparsers(dest="command", required=True)
     doctor = commands.add_parser("doctor", help="Check Desktop, SPX, option discovery/history and IPA access")
     doctor.add_argument("--prompt", action="store_true", help="Read an app key through hidden input")
     doctor.add_argument("--output", type=Path, help="Save redacted doctor.json")
-    for name in ("fetch", "validate", "calibrate", "report", "run"):
+    for name in ("fetch", "validate", "calibrate", "report", "run", "surface-fit"):
         p = commands.add_parser(name, help={
             "fetch": "Fetch a credential-free LSEG EOD snapshot",
             "validate": "Validate an offline snapshot and compare GBM MC to QuantLib",
             "calibrate": "Fit Heston with deterministic pricing and save a report",
             "report": "Rebuild the complete report from an offline snapshot",
             "run": "Fetch or replay, validate, calibrate and report",
+            "surface-fit": "Fit an offline SSVI surface and compare Heston on the same quote targets",
         }[name])
-        p.add_argument("--snapshot", type=Path, help="Replay a snapshot without connecting to LSEG")
+        p.add_argument("--snapshot", type=Path, required=name == "surface-fit",
+                       help="Replay a snapshot without connecting to LSEG")
         p.add_argument("--as-of", help="Requested YYYY-MM-DD (default: last completed published session)")
         p.add_argument("--curves", type=Path, help="Explicit historical curves CSV")
         p.add_argument("--output", type=Path, help="Artifact directory (default: artifacts/market_validation/<UTC timestamp>)")
-        p.add_argument("--paths", type=_positive, default=100_000)
-        p.add_argument("--steps", type=_sequence, default=(64, 256, 1024))
-        p.add_argument("--seeds", type=_seed_sequence, default=(42, 43, 44))
+        if name != "surface-fit":
+            p.add_argument("--paths", type=_positive, default=100_000)
+            p.add_argument("--steps", type=_sequence, default=(64, 256, 1024))
+            p.add_argument("--seeds", type=_seed_sequence, default=(42, 43, 44))
         p.add_argument("--starts", type=_positive, default=8)
         p.add_argument("--max-nfev", type=_positive, default=500)
-        p.add_argument("--no-calibration", action="store_true")
-        p.add_argument("--no-mc", action="store_true")
+        if name != "surface-fit":
+            p.add_argument("--no-calibration", action="store_true")
+            p.add_argument("--no-mc", action="store_true")
+        if name in {"surface-fit", "report", "run"}:
+            p.add_argument("--surface-model", choices=("ssvi",), default="ssvi" if name == "surface-fit" else None,
+                           help="Fit a local SSVI surface; optional on report/run")
+            p.add_argument("--seed", type=_seed, default=42, help="SSVI optimisation seed")
+            p.add_argument("--max-iter", type=_positive, default=2000, help="SSVI iteration limit per start")
         if name in {"fetch", "run"}:
             p.add_argument("--verify-vendor-surface", action="store_true",
                            help="Request typed IPA supplier-volatility evidence; requires FinancialContracts content access")
@@ -72,6 +88,7 @@ def main(argv=None):
     args = parser().parse_args(argv)
     started = perf_counter()
     timings = {}
+    validated = calibration = numerical = surface_fit = None
     output = args.output or Path("artifacts/market_validation") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     try:
         if args.command == "doctor":
@@ -115,14 +132,48 @@ def main(argv=None):
         validated["dataset_sha256"] = snapshot["dataset_sha256"]
         validated["versions"] = snapshot["versions"]
         write_json(output / "validated.json", validated)
+        if getattr(args, "surface_model", None):
+            from .surface import fit_ssvi
+            surface_started = perf_counter()
+            try:
+                surface_fit = fit_ssvi(validated, starts=args.starts, maxiter=args.max_iter, seed=args.seed)
+            except (ValueError, RuntimeError, ImportError, OSError) as exc:
+                surface_fit = {"schema_version": 1, "model": "SSVI", "status": "failed", "reason": str(exc),
+                               "source": validated.get("source"), "dataset_sha256": validated.get("dataset_sha256"),
+                               "surface": None, "parameters": None, "train": None, "holdout": None,
+                               "predictions": [], "starts": [], "chosen_start": None,
+                               "qualifying_expiries": [], "excluded_expiries": [],
+                               "settings": {"starts": args.starts, "maxiter": args.max_iter, "seed": args.seed},
+                               "diagnostics": {"error": {"type": type(exc).__name__, "message": str(exc)}},
+                               "expiry_holdouts": [], "sensitivities": []}
+                raise
+            finally:
+                timings["surface_fit"] = perf_counter() - surface_started
         if not validated["accepted"]:
-            write_report(validated, None, None, output)
+            write_report(validated, None, None, output, surface_fit=surface_fit)
             raise ValueError("No valid quotes; see validated.json for rejection reasons")
-        calibration = None
-        numerical = None
-        if args.command in {"calibrate", "report", "run"} and not args.no_calibration:
+        if args.command == "surface-fit" and surface_fit.get("status") != "converged":
+            # A failed requested fit is independently reviewable. Do not let
+            # an unnecessary second-stage Heston run hide its diagnostics.
+            timings["before_report"] = perf_counter() - started
+            validated["timings_seconds"] = timings
+            write_json(output / "validated.json", validated)
+            path = write_report(validated, None, None, output, surface_fit=surface_fit)
+            print("Surface status: " + str(surface_fit.get("status", "unknown")))
+            print(f"Report: {path}")
+            return 1
+        # surface-fit always supplies the existing independent Heston baseline;
+        # its deterministic comparison never starts a Monte Carlo run.
+        if args.command == "surface-fit" or (args.command in {"calibrate", "report", "run"} and not args.no_calibration):
             calibration_started = perf_counter()
-            calibration = calibrate(validated, starts=args.starts, max_nfev=args.max_nfev)
+            try:
+                calibration = calibrate(validated, starts=args.starts, max_nfev=args.max_nfev)
+            except (ValueError, RuntimeError, ImportError, OSError) as exc:
+                if surface_fit is not None:
+                    calibration = {"schema_version": 1, "status": "failed", "reason": str(exc),
+                                   "parameters": None, "predictions": [],
+                                   "settings": {"starts": args.starts, "max_nfev": args.max_nfev, "seed": 42}}
+                raise
             timings["calibration"] = perf_counter() - calibration_started
             write_json(output / "calibration.json", calibration)
         if args.command in {"validate", "report", "run"} and not args.no_mc:
@@ -135,18 +186,32 @@ def main(argv=None):
         timings["before_report"] = perf_counter() - started
         validated["timings_seconds"] = timings
         write_json(output / "validated.json", validated)
-        path = write_report(validated, calibration, numerical, output)
+        path = write_report(validated, calibration, numerical, output, surface_fit=surface_fit)
         print(f"Accepted {len(validated['accepted'])}; rejected {len(validated['rejected'])}")
         print(f"Report: {path}")
         if calibration:
             print("Calibration status: " + str(calibration.get("status", "unknown")))
-        return 0 if not calibration or calibration.get("status") == "converged" else 1
+        if surface_fit:
+            print("Surface status: " + str(surface_fit.get("status", "unknown")))
+        successful = ((not calibration or calibration.get("status") == "converged")
+                      and (surface_fit is None or surface_fit.get("status") == "converged"))
+        return 0 if successful else 1
     except (ValueError, RuntimeError, ImportError, OSError) as exc:
         error = {"status": "error", "type": type(exc).__name__, "message": str(exc)}
         if hasattr(exc, "code"):
             error["code"] = exc.code
         if hasattr(exc, "diagnostics"):
             error["diagnostics"] = exc.diagnostics
+        if surface_fit is not None and validated is not None:
+            # Requested surface evidence survives any later-stage failure.
+            # write_report writes JSON/CSV before plotting, so dependency or
+            # chart failures still leave a reviewable saved candidate.
+            try:
+                timings["before_report"] = perf_counter() - started
+                validated["timings_seconds"] = timings
+                write_report(validated, calibration, numerical, output, surface_fit=surface_fit)
+            except (ValueError, RuntimeError, ImportError, OSError) as report_error:
+                error["surface_report_error"] = str(report_error)
         write_json(output / "error.json", error)
         print(json.dumps(redact(error), indent=2), file=sys.stderr)
         print(f"Diagnostics: {output / 'error.json'}", file=sys.stderr)
