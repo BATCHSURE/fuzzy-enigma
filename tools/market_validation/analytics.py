@@ -289,7 +289,9 @@ def validate_snapshot(snapshot, *, min_days=7, max_days=365, min_moneyness=0.8,
     if any(not row["bid_ask_usable"] for row in accepted):
         diagnostics.append({"code": "historical_bid_ask_missing", "meaning": "No tradable interval or spread-pass conclusion for those Close observations"})
     diagnostics.append({"code": "time_convention", "value": "ACT/365F date-based EOD; exact expiry timestamp metadata is preserved"})
+    from .snapshot import dataset_hash, versions
     return {"schema_version": 1, "accepted": accepted, "rejected": rejected, "diagnostics": diagnostics,
+            "dataset_sha256": dataset_hash(snapshot), "versions": versions(),
             "capture_diagnostics": snapshot.get("diagnostics", {}),
             "source": source, "spot": spot, "curves": list(curves.values()),
             "vendor_surface": _vendor_surface(snapshot, as_of, diagnostics),

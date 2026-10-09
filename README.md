@@ -12,6 +12,10 @@ The staged expansion plan and exact teaching contract terms live in
 [Heston](notebooks/heston.ipynb). Optional SPXW market validation, offline
 snapshot replay, and independent Heston calibration are documented in
 [docs/MARKET_VALIDATION.md](docs/MARKET_VALIDATION.md).
+The optional market module also provides a quote-derived, constrained SSVI
+`VolSurface`, offline fitting, and calibration diagnostics. The worked
+[volatility surface notebook](notebooks/volatility_surface.ipynb) uses saved
+LSEG data and runs without credentials.
 
 ## Features
 
@@ -333,9 +337,10 @@ Use Python 3.12 and the optional `market` extra for the SPXW workflow.
 Live access uses the desktop LSEG session and `LSEG_APP_KEY`; the doctor
 checks actual capabilities, and saved snapshots support offline replay.
 Desktop access, the SPX close, SPXW Search discovery/native daily history,
-and historical IPA surface/curve requests have succeeded for 2026-10-06.
-The reviewed capture contains 74 quotes across six expiries, with 72
-accepted quotes and a converged Heston fit on five qualifying expiries.
+and historical IPA surface/curve requests have succeeded. The latest reviewed
+capture is dated 2026-10-08: 87 quotes and seven curve expiries, with 84
+accepted quotes and a converged SSVI fit on six qualifying expiries.
+The 2026-10-06 snapshot remains available for historical replay.
 The historical option probe reported delayed quote quality of service.
 
 ```sh
@@ -344,10 +349,16 @@ python -m tools.market_validation doctor --output artifacts/market_doctor
 python -m tools.market_validation run \
   --snapshot path/to/snapshot.json --curves path/to/curves.csv \
   --output artifacts/market_report
+
+# Fit a constrained quote-derived surface entirely offline.
+python -m tools.market_validation surface-fit \
+  --snapshot tests/fixtures/market/lseg_spxw_20261008_surface.json \
+  --surface-model ssvi --starts 8 --seed 42 --max-iter 2000 \
+  --output artifacts/market_validation/ssvi_20261008
 ```
 
-The CLI provides `doctor`, `fetch`, `validate`, `calibrate`, `report`, and
-`run`. QuantLib supplies the independent vanilla pricing/calibration path;
+The CLI provides `doctor`, `fetch`, `validate`, `calibrate`, `surface-fit`,
+`report`, and `run`. QuantLib supplies the independent vanilla pricing/calibration path;
 the Rust Monte Carlo engine supplies separate grid/seed comparisons.
 The additive `fe.black_scholes_price(model, option_type, strike)` helper
 exposes the Rust closed-form GBM price for independent regression checks.

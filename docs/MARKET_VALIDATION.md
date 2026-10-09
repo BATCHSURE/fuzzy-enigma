@@ -2,7 +2,7 @@
 
 The optional Python tools connect quote snapshots, independent QuantLib vanilla prices, Heston calibration, and comparisons with the Rust Monte Carlo engine. The first release uses a fixed SPXW profile. Market access is an observed capability of your LSEG/Refinitiv account: a desktop session or application key does not establish option-chain, historical-option, or IPA permissions.
 
-Desktop-session access, the SPX close for 2026-10-06, SPXW Search discovery, native daily option history, and historical IPA surface/discount/forward requests have succeeded. The option `TR.PriceClose` field was unavailable; native daily `TRDPRC_1` supplied a dated fallback. A full real-data snapshot and eight-start Heston fit have been reviewed. The tools preserve diagnostics for unavailable or unentitled requests. Saved market snapshots and clearly labelled synthetic fixtures can be replayed offline.
+Desktop-session access, the SPX close for 2026-10-06, SPXW Search discovery, native daily option history, and historical IPA surface/discount/forward requests have succeeded. The option `TR.PriceClose` field was unavailable; native daily `TRDPRC_1` supplied a dated fallback. Real snapshots dated 2026-10-06 and 2026-10-08, eight-start constrained SSVI fits, and analytic Heston comparisons have been reviewed. The tools preserve diagnostics for unavailable or unentitled requests. Saved market snapshots and clearly labelled synthetic fixtures can be replayed offline.
 
 The verified native history probe for `SPXWj132677450.U` returned the 2026-10-06 Close of 94.77 index points, bid 93.4, and ask 98.1, with delayed quote quality of service. This is evidence for that request and date, not a claim of universal option or real-time entitlements.
 
@@ -287,9 +287,161 @@ All 14 selected summaries satisfy `abs(estimate - reference) <= 4 × SE + 1e-12 
 
 Actual supplier verification remains blocked by content access. Historical FinancialContracts `ImpliedYield` was unsupported; the alternative typed `HistoricalYield` request with captured spot/discount/forward overrides was access-denied for `/.SPX`. The native historical `IMP_VOLT` value 9.9341 lacks unit/model metadata; `TR.OPWCloseImpliedVolatility` was empty, and `TR.IMPLIEDVOLATILITY=9.9341` lacks unit and dated-response fields. None is accepted as verified supplier volatility. The old untyped matrix is retained as raw provenance, excluded from plots and comparisons, and diagnosed as unavailable. Resolving this remaining supplier limitation requires the account's FinancialContracts content permission and successful typed response checks.
 
+## Quote-derived SSVI surfaces
+
+The optional market module exports `VolSurface` and `fit_ssvi`. It fits the
+eligible option Close prices and explicit dated carry inputs. The result is a
+**locally constructed SSVI surface**, separate from supplier IV. Existing typed
+supplier-evidence requirements still apply to vendor overlays.
+
+The first variant fixes the modified-power exponent at `gamma=1/2`, with
+`phi(theta) = eta / sqrt(theta * (1 + theta))`, shared `rho` and `eta`, and
+non-decreasing ATM **total variance** nodes. It imposes
+`eta * (1 + abs(rho)) <= 2 - epsilon`, with `epsilon=1e-6`, following
+[Gatheral and Jacquier](https://arxiv.org/abs/1204.0646). Annualised IV itself
+need not increase with maturity. This parameterisation and its analytic
+constraints define the static no-arbitrage certificate; numerical scans are
+supplementary diagnostics.
+
+### Fit an offline snapshot
+
+```sh
+python -m tools.market_validation surface-fit \
+  --snapshot tests/fixtures/market/lseg_spxw_20261008_surface.json \
+  --surface-model ssvi --starts 8 --seed 42 --max-iter 2000 \
+  --output artifacts/market_validation/ssvi_20261008
+
+python -m tools.market_validation report \
+  --snapshot tests/fixtures/market/lseg_spxw_20261008_surface.json \
+  --surface-model ssvi --no-mc \
+  --output artifacts/market_validation/ssvi_comparison
+```
+
+`surface-fit` requires `--snapshot` and never opens a data session. It fits SSVI,
+performs an analytic Heston comparison on the same primary training/holdout
+targets, and writes a report without Monte Carlo. `report` and `run` accept
+`--surface-model ssvi` as an opt-in; omitting it preserves their existing
+behaviour. Existing `--no-calibration` and `--no-mc` controls retain their
+meaning for the Heston and numerical stages.
+
+The fit reuses the existing validation, fixed uncertainties, OTM representatives,
+and grouped strike holdout. It requires at least three expiries with five training
+OTM strike groups each. Thin expiries retain explicit exclusions. Initial ATM
+nodes use training quotes only, with bracketed log-moneyness interpolation or a
+labelled one-sided observation and count-weighted isotonic projection. Held-out
+quotes and supplier values do not initialize nodes or select starts.
+
+SLSQP minimises mean `soft_l1` weighted price loss using analytic Jacobians.
+Defaults are eight seeded starts, seed 42, 2,000 iterations, and `ftol=1e-10`.
+Fitting bounds are `rho` in `[-0.999,0.999]`, `eta` in `[0,2-epsilon]`, and
+ATM total variance in `[1e-10,4]`. The final vector must independently pass
+finite-value and constraint checks. `converged`, `incomplete`, `failed`, and
+`insufficient_data` remain distinct; a requested non-converged fit returns a
+non-zero CLI status with its diagnostic artifacts.
+
+### Evaluate and save a surface
+
+```python
+from tools.market_validation import VolSurface, fit_ssvi
+from tools.market_validation.analytics import validate_snapshot
+from tools.market_validation.snapshot import read_snapshot
+
+snapshot = read_snapshot("tests/fixtures/market/lseg_spxw_20261008_surface.json")
+fit = fit_ssvi(validate_snapshot(snapshot), starts=8, seed=42)
+if fit["status"] != "converged":
+    raise RuntimeError(fit["status"])
+surface = VolSurface.from_dict(fit["surface"])
+surface.save("artifacts/ssvi_surface.json")
+restored = VolSurface.load("artifacts/ssvi_surface.json")
+# Choose a strike/expiry inside this artifact's recorded observation domain.
+node = fit["surface"]["nodes"][0]
+print(restored.total_variance(0.0, node["t"]))
+print(restored.derivatives(0.0, node["t"]))
+```
+
+`total_variance(k, t)` uses log-forward-moneyness and years.
+`implied_vol(strike, expiry)` returns decimal annualised IV, and
+`black_price(option_type, strike, expiry)` returns the Black value in index
+points. Date queries use ACT/365F relative to the artifact's as-of date.
+`derivatives(k, t)` provides `w`, `w_k`, `w_kk`, and `w_t`; time-knot derivatives
+are one-sided, right by default and left at the final knot. The result records
+`time_side` and `wing_extrapolation`; an explicit `time_side="left"` selects the
+left slope when available.
+
+ATM total variance is linearly interpolated between fitted nodes. Default
+queries require the fitted maturity range and observed `(k,t)` coverage. An
+explicit `allow_wing=True` permits model-wing evaluation at an in-range
+maturity; those values are extrapolation assumptions. Short/long maturity
+extrapolation is not supported. Strike/date queries additionally require exact
+carry nodes or recorded log-linear discount/forward interpolation inside the
+supplied carry range. Missing carry is rejected.
+
+Serialization has a separate surface schema version, recorded parameterisation,
+units, dated curves, coverage, source/data/curve hashes, and fitting metadata.
+Loading revalidates numerical inputs, constraints, dates, and curve consistency.
+The piecewise-linear time representation is useful for vanilla surface research;
+a smooth, independently validated Dupire representation remains roadmap work.
+
+### Reports, diagnostics, and real-data replay
+
+| Artifact | Contents |
+|---|---|
+| `surface.json` | Versioned evaluable surface, or null when no valid candidate exists |
+| `surface_fit.json` | Full fit status, settings, starts, parameters, and metrics |
+| `surface_diagnostics.json` | Constraint evidence, initialization, expiry folds, and sensitivities |
+| `surface_residuals.csv` | Quote-level model price/IV differences, K/F and log(K/F), roles, and exclusions |
+| `surface_grouped_residuals.csv` | Train/holdout price and IV errors grouped by expiry, strike, and moneyness bands |
+| `surface_*.png` | Six charts: smiles, surface, constraints, and residuals by moneyness, expiry, and strike |
+
+Reports separate primary strike holdout from interior-expiry interpolation
+folds. A fold removes the entire expiry and its ATM node, rebuilds training-only
+initialisation, and runs only when three qualifying expiries remain. Carry
+sensitivity shifts risk-free/dividend yields by ±1 bp. Weight sensitivity uses
+assumed Close IV uncertainty of 0.5%/2%, preserving measured historical spread
+weights and baseline group membership. Failed perturbed inputs remain explicit.
+Multistart parameter dispersion is not a confidence interval. Shared-target
+SSVI/Heston comparisons check the Close/carry/uncertainty inputs and recompute
+the same mean `soft_l1` objective. Grouped price/IV diagnostics accompany the
+quote-level CSV; expiry folds remain separate interpolation checks.
+
+The appended live capture returned **2026-10-08** SPX Close of **7,765.36**,
+87 option quotes and seven dated curve expiries. Existing validation accepts
+84 quotes and rejects three. All retained quote Close dates and supplied curve
+as-of dates match. Full raw evidence remains local under
+`artifacts/market_validation/lseg-latest-vol-surface/`; the curated
+[2026-10-08 fixture](../tests/fixtures/market/lseg_spxw_20261008_surface.json)
+supports credential-free replay. The fuller
+[2026-10-06 surface fixture](../tests/fixtures/market/lseg_spxw_20261006_surface.json)
+retains the earlier 74-quote capture for fitting regressions. The existing
+six-case independent pricing fixture remains unchanged.
+
+Curated snapshots identify their parent capture hash and raw evidence as locally
+retained rather than bundled. They contain quote/carry evidence and omit
+unverified supplier IV. Fit residuals against either dated market snapshot are
+market diagnostics; independent SVI/Black fixtures verify implementation accuracy.
+
+| Snapshot | Eligible maturities | Train / holdout groups | SSVI train price RMSE | SSVI holdout price RMSE | Holdout IV MAE |
+|---|---:|---:|---:|---:|---:|
+| 2026-10-06 | 5 | 48 / 10 | 2.61958 | 1.93467 | 222.79 bp |
+| 2026-10-08 | 6 | 58 / 12 | 2.69105 | 6.14531 | 119.87 bp |
+
+Prices are index points. These are default eight-start replay results, not
+accuracy tolerances or an assumption that SSVI must outperform Heston. All
+primary fits, interior-expiry folds, and six sensitivity scenarios converge.
+Every accepted quote in these two captures has usable dated historical
+bid/ask evidence, so changing the fallback Close-IV uncertainty leaves the
+spread-based weights and fits unchanged.
+
 ## Regressions and notebooks
 
-All 42 offline market tests pass, covering filtering, date/curve alignment, independent prices, real-data Heston references and MC, conditional rare-tail resolution, strict supplier units/model/date/carry evidence, calibration outputs, thin-expiry handling, duplicate seeds, provenance, and unusable-data diagnostics without contacting LSEG. The Rust suite passes 79 tests, and the three conditional-pricing Python smoke groups pass on CPython 3.12 and 3.14 alongside the existing binding/extension smoke checks. The committed fixtures contain six real LSEG reference cases and twelve synthetic reference cases. Synthetic fixtures are explicitly labelled and do not establish live data permissions. The Python 3.12 CI job runs all `test_market*.py` regressions and notebooks in addition to the existing core checks.
+All 67 offline market tests pass, including 25 SSVI tests and the previous 42 tests covering filtering, date/curve alignment, independent prices, real-data Heston references and MC, conditional rare-tail resolution, strict supplier units/model/date/carry evidence, calibration outputs, thin-expiry handling, duplicate seeds, provenance, and unusable-data diagnostics without contacting LSEG. The Rust suite passes 79 tests, and the three conditional-pricing Python smoke groups pass on CPython 3.12 and 3.14 alongside the existing binding/extension smoke checks. The committed fixtures contain six real LSEG vanilla reference cases, twelve
+synthetic vanilla cases, two dated full market replay fixtures, and 63 frozen
+independent QuantLib SVI cases. Total-variance checks use `atol=1e-12,
+rtol=1e-10`; Black prices use `atol=1e-9, rtol=1e-10`. Analytic first/time
+derivatives use relative tolerance `1e-6`, second strike derivatives `1e-4`
+at well-conditioned points. The SSVI suite also checks serialization/hash
+tampering, constraint/coverage boundaries, holdout leakage, fixed sensitivity
+groups, and failed perturbed inputs. Synthetic fixtures are explicitly labelled and do not establish live data permissions. The Python 3.12 CI job runs all `test_market*.py` regressions and notebooks in addition to the existing core checks.
 
 The checked-in [synthetic SPXW regression snapshot](../tests/fixtures/market/synthetic_spxw.json) contains explicit synthetic curves and can demonstrate offline report generation without credentials:
 
@@ -328,7 +480,7 @@ Run offline tests with the market environment:
 python -m unittest discover -s tests -p 'test_market*.py' -v
 ```
 
-The worked notebooks remain [the introductory example](../notebooks/example.ipynb), [structured notes](../notebooks/structured_notes.ipynb), [numerical methods](../notebooks/numerical_methods.ipynb), and [Heston](../notebooks/heston.ipynb). All four have now rerun successfully: 18 code cells and nine PNG outputs are saved, and both the kernel-free runner and fresh Jupyter kernels pass. See the [roadmap](ROADMAP.md) for milestone status and the established pricing conventions.
+The worked notebooks are [the introductory example](../notebooks/example.ipynb), [structured notes](../notebooks/structured_notes.ipynb), [numerical methods](../notebooks/numerical_methods.ipynb), [Heston](../notebooks/heston.ipynb), and [volatility surfaces](../notebooks/volatility_surface.ipynb). All five run successfully in fresh Jupyter kernels: 23 code cells and 13 PNG outputs are saved and inspected. The surface example uses the newest checked-in dated fixture, records hashes/configuration/timings, and displays observations, fits, constraints, residuals, expiry folds, and sensitivities. See the [roadmap](ROADMAP.md) for milestone status and the established pricing conventions.
 
 Install notebook dependencies and execute the portable runner from the repository root:
 
