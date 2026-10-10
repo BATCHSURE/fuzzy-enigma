@@ -17,6 +17,7 @@
 //! See `examples/price_options.rs` for end-to-end usage.
 
 pub mod analytic;
+pub mod dated;
 pub mod error;
 pub mod greeks;
 pub mod model;

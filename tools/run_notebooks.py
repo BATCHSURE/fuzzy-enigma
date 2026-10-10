@@ -83,7 +83,7 @@ def _worker(args):
             kernel_path = Path(directory) / "fuzzy"
             kernel_path.mkdir()
             (kernel_path / "kernel.json").write_text(json.dumps({
-                "argv": [sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+                "argv": [sys.executable, "-m", "ipykernel_launcher", "--matplotlib=inline", "-f", "{connection_file}"],
                 "display_name": "Fuzzy notebook checks", "language": "python",
             }))
             manager = KernelManager(kernel_name="fuzzy", kernel_spec_manager=KernelSpecManager(kernel_dirs=[directory]))
@@ -95,15 +95,22 @@ def _worker(args):
                 if manager.has_kernel:
                     manager.shutdown_kernel(now=True)
         count = sum(c.cell_type == "code" for c in nb.cells)
-        print(f"PASS {path.name}: {count} cells, {time.perf_counter()-start:.2f}s")
-    if args.write:
+        images = sum("image/png" in output.get("data", {})
+                     for cell in nb.cells for output in cell.get("outputs", []))
+        print(f"PASS {path.name}: {count} cells, {images} figures, {time.perf_counter()-start:.2f}s")
+    if args.write or args.output_dir:
         import nbformat
-        nbformat.write(nb, path)
+        if args.output_dir:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            nbformat.write(nb, args.output_dir / path.name)
+        else:
+            nbformat.write(nb, path)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--write", action="store_true", help="Save execution outputs without changing source cells")
+    p.add_argument("--output-dir", type=Path, help="Save executed notebooks separately, keeping repository sources unchanged")
     p.add_argument("--kernel-free", action="store_true", help="Execute Python cells and render figures without a Jupyter kernel")
     p.add_argument("--timeout", type=int, default=600, help="Per-cell Jupyter timeout in seconds")
     p.add_argument("--notebook", type=Path, help=argparse.SUPPRESS)
@@ -117,6 +124,8 @@ def main():
             command.append("--kernel-free")
         if args.write:
             command.append("--write")
+        if args.output_dir:
+            command.extend(["--output-dir", str(args.output_dir.resolve())])
         subprocess.run(command, cwd=path.parent, check=True)
 
 

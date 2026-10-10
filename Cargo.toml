@@ -24,6 +24,8 @@ rand = "0.8"
 rand_chacha = "0.3"
 rand_distr = "0.4"
 rayon = "1.8"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+sha2 = "0.10"
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"], optional = true }
 
 [[example]]

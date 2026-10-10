@@ -76,6 +76,7 @@ jobs:
           python tests/test_bindings.py
           python tests/test_extensions.py
           python tests/test_conditional.py
+          python tests/test_dated.py
 
   abi3:
     # The extension is built with `abi3-py39`, so one wheel must load on
@@ -122,6 +123,7 @@ jobs:
             python$v tests/test_bindings.py
             python$v tests/test_extensions.py
             python$v tests/test_conditional.py
+            python$v tests/test_dated.py
           done
 
   market-and-notebooks:
