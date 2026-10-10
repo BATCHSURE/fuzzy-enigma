@@ -16,6 +16,11 @@ The optional market module also provides a quote-derived, constrained SSVI
 `VolSurface`, offline fitting, and calibration diagnostics. The worked
 [volatility surface notebook](notebooks/volatility_surface.ipynb) uses saved
 LSEG data and runs without credentials.
+The additive [dated-note API](docs/dated_notes.md) values outstanding Snowball
+and Phoenix contracts with actual-date schedules, term-structure curves,
+historical state and explicit settlement records. The
+[outstanding-note notebook](notebooks/outstanding_notes.ipynb) combines saved
+market curves with clearly labelled synthetic teaching histories.
 
 ## Features
 
@@ -43,6 +48,9 @@ LSEG data and runs without credentials.
 - **Heston European conditional Monte Carlo** with analytic integration of
   the independent stock noise and defensive importance sampling of variance tails.
 - **Greeks** by bump-and-revalue under common random numbers.
+- **Dated outstanding notes** with ACT/365F fixing/payment schedules, bounded
+  discount/forward curves, history replay, coupon memory, partial settlements,
+  and frozen-market calendar roll for GBM and Heston dynamics.
 - **Parallel evaluation** via [`rayon`](https://crates.io/crates/rayon).
 - **Reproducible** results: path `i` draws from ChaCha20 *stream* `i` under
   the engine's key, so a given `(seed, paths)` pair yields the same price
@@ -231,13 +239,24 @@ ends of the supported interpreter range:
 ```sh
 python tests/test_bindings.py
 python tests/test_extensions.py
+python tests/test_dated.py
+```
+
+The dated smoke test covers historical knock-in/memory, pending and partial
+settlement, deterministic receivables, cutoff scenarios and paired calendar
+roll. Thirteen offline curve-bridge tests replay both committed LSEG snapshots
+and check exact nodes, independent interpolation, input hashes and deterministic
+cashflow discounting:
+
+```sh
+python -m unittest discover -s tests -p 'test_market_curves.py' -v
 ```
 
 ## Python bindings
 
 The same crate exposes a Python extension module via [PyO3](https://pyo3.rs)
 and [maturin](https://www.maturin.rs/). The `python` Cargo feature is
-opt-in, so the pure-Rust build stays dependency-free.
+opt-in, so the pure-Rust build does not require Python.
 
 The extension is built against the **stable ABI** (`abi3-py39`), so one
 `fuzzy_enigma.abi3.so` - and one `cp39-abi3` wheel - loads on every CPython
@@ -330,6 +349,21 @@ scheduled Asian and continuous barrier also expose corresponding Greeks.
 Greeks, analytic controls, and continuous bridge methods require GBM and
 reject Heston with `ValueError`. Standard uncontrolled payoff pricing accepts
 both models; `price_heston_conditional` requires Heston and a European payoff.
+
+### Dated outstanding notes
+
+Use `DiscountCurve`, `ForwardCurve`, `TimeGrid` and `ValuationContext` with
+`GbmDynamics` or `HestonDynamics`. The additive `price_snowball_dated` and
+`price_phoenix_dated` methods retain the original contract reference, replay
+explicit historical fixings, and discount outstanding payments on their
+effective settlement dates. Paid amounts are excluded from current PV; overdue
+unpaid balances require an explicit expected settlement date on or after valuation.
+
+`calendar_theta` rolls fixed contractual dates with frozen spot/dynamics and
+rebased curves, reporting PV change separately from paid cash. Existing Greeks
+keep their schedule-scaled `dV/dT` convention. See the
+[dated-note guide](docs/dated_notes.md) for constructors, cutoff/event ordering,
+settlement and roll conventions, and the offline snapshot bridge.
 
 ## Optional market tools
 

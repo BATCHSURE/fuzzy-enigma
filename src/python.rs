@@ -21,6 +21,9 @@ use crate::payoff::{
 use crate::pricer::{EuropeanControl, McEngine, PriceResult};
 use crate::structured::{PhoenixNote, SnowballNote};
 
+#[path = "python_dated.rs"]
+mod dated_bindings;
+
 #[derive(Clone)]
 enum PricingModel {
     Gbm(GbmModel),
@@ -800,6 +803,84 @@ impl PyMcEngine {
         )
     }
 
+    /// Price a dated Snowball from its validated historical state.
+    #[pyo3(signature = (contract, context, dynamics, state, *, grid = None))]
+    fn price_snowball_dated(
+        &self,
+        py: Python<'_>,
+        contract: PyRef<'_, dated_bindings::PySnowball>,
+        context: PyRef<'_, dated_bindings::PyContext>,
+        dynamics: Option<&Bound<'_, PyAny>>,
+        state: PyRef<'_, dated_bindings::PyState>,
+        grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+    ) -> PyResult<dated_bindings::PyDatedResult> {
+        dated_bindings::price(
+            py,
+            &self.inner,
+            crate::dated::DatedNote::Snowball(contract.inner.clone()),
+            &context,
+            dynamics,
+            &state,
+            grid.as_deref(),
+        )
+    }
+
+    /// Price a dated Phoenix, including earned unpaid coupon receivables.
+    #[pyo3(signature = (contract, context, dynamics, state, *, grid = None))]
+    fn price_phoenix_dated(
+        &self,
+        py: Python<'_>,
+        contract: PyRef<'_, dated_bindings::PyPhoenix>,
+        context: PyRef<'_, dated_bindings::PyContext>,
+        dynamics: Option<&Bound<'_, PyAny>>,
+        state: PyRef<'_, dated_bindings::PyState>,
+        grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+    ) -> PyResult<dated_bindings::PyDatedResult> {
+        dated_bindings::price(
+            py,
+            &self.inner,
+            crate::dated::DatedNote::Phoenix(contract.inner.clone()),
+            &context,
+            dynamics,
+            &state,
+            grid.as_deref(),
+        )
+    }
+
+    /// Frozen-spot calendar roll with explicit fixing and payment updates.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (contract, context, dynamics, state, roll_date = None, *, fixings = None,
+        settlements = None, same_day_fixing_scenario = None, grid = None, rolled_grid = None))]
+    fn calendar_theta(
+        &self,
+        py: Python<'_>,
+        contract: &Bound<'_, PyAny>,
+        context: PyRef<'_, dated_bindings::PyContext>,
+        dynamics: Option<&Bound<'_, PyAny>>,
+        state: PyRef<'_, dated_bindings::PyState>,
+        roll_date: Option<&Bound<'_, PyAny>>,
+        fixings: Option<&Bound<'_, PyAny>>,
+        settlements: Option<Vec<dated_bindings::PySettlement>>,
+        same_day_fixing_scenario: Option<&Bound<'_, PyAny>>,
+        grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+        rolled_grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+    ) -> PyResult<dated_bindings::PyCalendarResult> {
+        dated_bindings::calendar(
+            py,
+            &self.inner,
+            contract,
+            &context,
+            dynamics,
+            &state,
+            roll_date,
+            fixings,
+            settlements,
+            same_day_fixing_scenario,
+            grid.as_deref(),
+            rolled_grid.as_deref(),
+        )
+    }
+
     /// GBM Greeks holding the Snowball's contractual reference fixing constant.
     #[allow(clippy::too_many_arguments)]
     fn greeks_snowball(
@@ -1026,6 +1107,7 @@ impl PyMcEngine {
 
 #[pymodule]
 fn fuzzy_enigma(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    dated_bindings::register(m)?;
     m.add_class::<PyGbmModel>()?;
     m.add_class::<PyHestonModel>()?;
     m.add_class::<PyMcEngine>()?;
