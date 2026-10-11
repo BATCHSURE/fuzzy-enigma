@@ -4,6 +4,7 @@ use chrono::NaiveDate;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
+use std::sync::Arc;
 
 use crate::dated::*;
 use crate::pricer::McEngine;
@@ -1057,18 +1058,107 @@ impl PyHestonDynamics {
     }
 }
 
-fn dynamics(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Dynamics>> {
+#[pyclass(
+    name = "LocalVolModel",
+    module = "fuzzy_enigma",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(super) struct PyLocalVolModel {
+    inner: Arc<crate::local_vol::LocalVolModel>,
+}
+
+#[pymethods]
+impl PyLocalVolModel {
+    /// Validated smooth-model artifact, separate from the fitted VolSurface.
+    #[new]
+    fn new(artifact_json: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: Arc::new(
+                crate::local_vol::LocalVolModel::from_json(artifact_json).map_err(error)?,
+            ),
+        })
+    }
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: Arc::new(crate::local_vol::LocalVolModel::load(path).map_err(error)?),
+        })
+    }
+    fn to_json(&self) -> PyResult<String> {
+        self.inner.to_json().map_err(error)
+    }
+    #[getter]
+    fn identity(&self) -> String {
+        self.inner.identity()
+    }
+    fn total_variance(&self, k: f64, t: f64) -> PyResult<f64> {
+        self.inner.total_variance(k, t).map_err(error)
+    }
+    fn local_variance(&self, k: f64, t: f64) -> PyResult<f64> {
+        self.inner.local_variance(k, t).map_err(error)
+    }
+    fn derivatives(&self, py: Python<'_>, k: f64, t: f64) -> PyResult<Py<PyDict>> {
+        let value = self.inner.derivatives(k, t).map_err(error)?;
+        let item = PyDict::new(py);
+        item.set_item("theta", value.theta)?;
+        item.set_item("theta_t", value.theta_t)?;
+        item.set_item("w", value.w)?;
+        item.set_item("w_k", value.w_k)?;
+        item.set_item("w_kk", value.w_kk)?;
+        item.set_item("w_t", value.w_t)?;
+        item.set_item("g", value.g)?;
+        item.set_item("local_variance", value.local_variance)?;
+        item.set_item("short_time_extension", value.short_time_extension)?;
+        item.set_item("wing_extension", value.wing_extension)?;
+        Ok(item.unbind())
+    }
+    fn __repr__(&self) -> String {
+        format!("LocalVolModel(identity={})", self.identity())
+    }
+}
+
+#[derive(Clone)]
+enum ContextDynamics {
+    Standard(Dynamics),
+    LocalVol(Arc<crate::local_vol::LocalVolModel>),
+}
+
+fn price_with_dynamics<P: CashflowPayoff + ?Sized>(
+    engine: &McEngine,
+    context: &ValuationContext,
+    dynamics: Option<&ContextDynamics>,
+    payoff: &P,
+) -> Result<DatedPriceResult, ContextPricingError> {
+    match dynamics {
+        Some(ContextDynamics::LocalVol(model)) => {
+            engine.try_price_local_vol_context(context, model, payoff)
+        }
+        Some(ContextDynamics::Standard(model)) => {
+            engine.try_price_context(context, Some(model), payoff)
+        }
+        None => engine.try_price_context(context, None, payoff),
+    }
+}
+
+fn dynamics(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<ContextDynamics>> {
     let Some(value) = value else {
         return Ok(None);
     };
     if let Ok(value) = value.extract::<PyRef<'_, PyGbmDynamics>>() {
-        return Ok(Some(Dynamics::Gbm(value.inner)));
+        return Ok(Some(ContextDynamics::Standard(Dynamics::Gbm(value.inner))));
     }
     if let Ok(value) = value.extract::<PyRef<'_, PyHestonDynamics>>() {
-        return Ok(Some(Dynamics::Heston(value.inner)));
+        return Ok(Some(ContextDynamics::Standard(Dynamics::Heston(
+            value.inner,
+        ))));
+    }
+    if let Ok(value) = value.extract::<PyRef<'_, PyLocalVolModel>>() {
+        return Ok(Some(ContextDynamics::LocalVol(Arc::clone(&value.inner))));
     }
     Err(PyValueError::new_err(
-        "dated pricing requires GbmDynamics or HestonDynamics; legacy models are not accepted",
+        "context pricing requires GbmDynamics, HestonDynamics or LocalVolModel; legacy models are not accepted",
     ))
 }
 
@@ -1100,7 +1190,7 @@ fn expected_cashflows(py: Python<'_>, values: &[CashflowEstimate]) -> PyResult<V
 #[derive(Clone)]
 pub(super) struct PyDatedResult {
     inner: DatedPriceResult,
-    state: NoteState,
+    state: Option<NoteState>,
 }
 
 #[pymethods]
@@ -1129,10 +1219,10 @@ impl PyDatedResult {
         }
     }
     #[getter]
-    fn state(&self) -> PyState {
-        PyState {
-            inner: self.state.clone(),
-        }
+    fn state(&self) -> Option<PyState> {
+        self.state.as_ref().map(|inner| PyState {
+            inner: inner.clone(),
+        })
     }
     #[getter]
     fn cutoff(&self) -> PyCutoff {
@@ -1142,7 +1232,10 @@ impl PyDatedResult {
     }
     #[getter]
     fn known_receivables(&self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
-        ledger(py, self.state.receivables())
+        match &self.state {
+            Some(state) => ledger(py, state.receivables()),
+            None => Ok(Vec::new()),
+        }
     }
     #[getter]
     fn expected_cashflows(&self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
@@ -1159,6 +1252,27 @@ impl PyDatedResult {
     #[getter]
     fn grid_identity(&self) -> String {
         self.inner.grid_identity.clone()
+    }
+    #[getter]
+    fn path_diagnostics(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
+        match &self.inner.path_diagnostics {
+            Some(value) => {
+                let item = PyDict::new(py);
+                item.set_item("evaluations", value.evaluations)?;
+                item.set_item(
+                    "outside_observed_evaluations",
+                    value.outside_observed_evaluations,
+                )?;
+                item.set_item("wing_evaluations", value.wing_evaluations)?;
+                item.set_item("short_time_evaluations", value.short_time_evaluations)?;
+                item.set_item("paths_with_extensions", value.paths_with_extensions)?;
+                item.set_item("minimum_k", value.minimum_k)?;
+                item.set_item("maximum_k", value.maximum_k)?;
+                item.set_item("extension_policy", &value.extension_policy)?;
+                Ok(Some(item.unbind()))
+            }
+            None => Ok(None),
+        }
     }
     fn confidence_95(&self) -> (f64, f64) {
         self.inner.estimate.confidence_95()
@@ -1209,12 +1323,93 @@ pub(super) fn price(
     let dynamics = self::dynamics(dynamics)?;
     let engine = engine.clone();
     let inner = py
-        .detach(move || engine.try_price_context(&context, dynamics.as_ref(), &payoff))
+        .detach(move || price_with_dynamics(&engine, &context, dynamics.as_ref(), &payoff))
         .map_err(error)?;
     Ok(PyDatedResult {
         inner,
-        state: state.inner.clone(),
+        state: Some(state.inner.clone()),
     })
+}
+
+fn price_context_option<P: CashflowPayoff + 'static>(
+    py: Python<'_>,
+    engine: &McEngine,
+    context: &PyContext,
+    dynamics: Option<&Bound<'_, PyAny>>,
+    payoff: P,
+    grid: Option<&PyGrid>,
+) -> PyResult<PyDatedResult> {
+    let dynamics = self::dynamics(dynamics)?;
+    let grid = match grid {
+        Some(grid) => grid.inner.clone(),
+        None if context.inner.grid.steps() > 0 => context.inner.grid.clone(),
+        None => TimeGrid::try_new(context.inner.as_of(), payoff.future_fixing_dates(), 1.0)
+            .map_err(error)?,
+    };
+    let context = context.inner.with_grid(grid).map_err(error)?;
+    let engine = engine.clone();
+    let inner = py
+        .detach(move || price_with_dynamics(&engine, &context, dynamics.as_ref(), &payoff))
+        .map_err(error)?;
+    Ok(PyDatedResult { inner, state: None })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn price_european_context(
+    py: Python<'_>,
+    engine: &McEngine,
+    context: &PyContext,
+    dynamics: Option<&Bound<'_, PyAny>>,
+    option_type: &str,
+    strike: f64,
+    expiry: &Bound<'_, PyAny>,
+    payment_date: Option<&Bound<'_, PyAny>>,
+    grid: Option<&PyGrid>,
+) -> PyResult<PyDatedResult> {
+    let expiry = date(expiry)?;
+    let payment = payment_date.map(date).transpose()?.unwrap_or(expiry);
+    let payoff = ContextEuropeanOption::try_new(
+        super::parse_option_type(option_type)?,
+        strike,
+        expiry,
+        payment,
+        context.inner.currency.clone(),
+    )
+    .map_err(error)?;
+    price_context_option(py, engine, context, dynamics, payoff, grid)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn price_barrier_context(
+    py: Python<'_>,
+    engine: &McEngine,
+    context: &PyContext,
+    dynamics: Option<&Bound<'_, PyAny>>,
+    option_type: &str,
+    strike: f64,
+    expiry: &Bound<'_, PyAny>,
+    barrier_kind: &str,
+    barrier: f64,
+    monitoring_dates: &Bound<'_, PyAny>,
+    rebate: f64,
+    payment_date: Option<&Bound<'_, PyAny>>,
+    grid: Option<&PyGrid>,
+) -> PyResult<PyDatedResult> {
+    let expiry = date(expiry)?;
+    let payment = payment_date.map(date).transpose()?.unwrap_or(expiry);
+    let payoff = ContextBarrierOption::try_new(
+        super::parse_option_type(option_type)?,
+        super::parse_barrier_kind(barrier_kind)?,
+        strike,
+        barrier,
+        rebate,
+        expiry,
+        payment,
+        dates(monitoring_dates)?,
+        context.inner.currency.clone(),
+    )
+    .map_err(error)?;
+    price_context_option(py, engine, context, dynamics, payoff, grid)
 }
 
 fn cashflow_kind(kind: &str) -> PyResult<CashflowKind> {
@@ -1316,14 +1511,14 @@ impl PyCalendarResult {
     fn base_result(&self) -> PyDatedResult {
         PyDatedResult {
             inner: self.inner.base.clone(),
-            state: self.base_state.clone(),
+            state: Some(self.base_state.clone()),
         }
     }
     #[getter]
     fn rolled_result(&self) -> PyDatedResult {
         PyDatedResult {
             inner: self.inner.rolled.clone(),
-            state: self.rolled_state.clone(),
+            state: Some(self.rolled_state.clone()),
         }
     }
 }
@@ -1344,7 +1539,13 @@ pub(super) fn calendar(
     rolled_grid: Option<&PyGrid>,
 ) -> PyResult<PyCalendarResult> {
     let contract = note(contract)?;
-    let dynamics = self::dynamics(dynamics)?;
+    let dynamics = match self::dynamics(dynamics)? {
+        Some(ContextDynamics::Standard(model)) => Some(model),
+        Some(ContextDynamics::LocalVol(_)) => return Err(PyValueError::new_err(
+            "calendar_theta does not support LocalVolModel: a surface-roll convention is not defined",
+        )),
+        None => None,
+    };
     let to = match roll_date {
         Some(value) => date(value)?,
         None => context
@@ -1445,6 +1646,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContext>()?;
     m.add_class::<PyGbmDynamics>()?;
     m.add_class::<PyHestonDynamics>()?;
+    m.add_class::<PyLocalVolModel>()?;
     m.add_class::<PyDatedResult>()?;
     m.add_class::<PyCalendarResult>()?;
     m.add_function(wrap_pyfunction!(replay, m)?)?;

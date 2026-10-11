@@ -6,13 +6,16 @@
 pub mod curves;
 pub mod engine;
 pub mod notes;
+pub mod options;
+
+pub use options::{ContextBarrierOption, ContextEuropeanOption};
 
 pub use chrono::NaiveDate as Date;
 pub use curves::{CurveNode, DiscountCurve, ForwardCurve, TimeGrid, ValuationContext};
 pub use engine::{
     try_calendar_theta, CalendarThetaResult, Cashflow, CashflowEstimate, CashflowKind,
     CashflowPayoff, ContextPathGenerator, CurvePathGenerator, DatedPriceResult, DatedPricingMethod,
-    Dynamics, GbmDynamics, HestonDynamics,
+    Dynamics, GbmDynamics, HestonDynamics, PathDiagnostics,
 };
 pub use notes::{
     advance_note_state, replay_note_history, roll_note_state, ActualPayment, DatedNote,

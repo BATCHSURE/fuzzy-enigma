@@ -2,7 +2,7 @@
 
 The project extends an existing single-underlying Rust/Python Monte Carlo library into a workspace for researching structured notes and comparing numerical methods and model assumptions. The first three milestones deliver products, numerical methods, and stochastic volatility while retaining existing calling conventions. The Rust test baseline before the expansion was 20 tests. Milestone 4 adds optional market validation and Heston calibration outside the core pricing engine.
 
-Milestones 1–3 are implemented. Milestone 4 has a reviewed market-data run and offline regressions; typed supplier-surface verification remains pending account permission. Milestone 5 is implemented in the optional Python market module, with dated market replay, independent numerical tests, and an executed notebook. Milestone 6 adds the native dated curve/cashflow layer, outstanding-note history and explicit settlement accounting. **Milestones 7–9 remain planned work, not available features.** Their interface names, CLI examples, and artifact names are proposed contracts to refine during implementation.
+Milestones 1–3 are implemented. Milestone 4 has a reviewed market-data run and offline regressions; typed supplier-surface verification remains pending account permission. Milestone 5 is implemented in the optional Python market module, with dated market replay, independent numerical tests, and an executed notebook. Milestone 6 adds the native dated curve/cashflow layer, outstanding-note history and explicit settlement accounting. Milestone 7A adds smooth surface export and native Dupire local-volatility pricing. **Milestones 7B–9 remain planned work, not available features.** Their interface names, CLI examples, and artifact names are proposed contracts to refine during implementation.
 
 The next objective is to connect dated option quotes, a validated volatility surface, outstanding-note valuation, and portfolio risk. The next model/portfolio extensions are milestones 7–8. The current supplier-permission limitation is tracked separately: a surface fitted to eligible option Close prices and dated carry inputs is a locally constructed surface, with its own provenance.
 
@@ -10,7 +10,7 @@ The next objective is to connect dated option quotes, a validated volatility sur
 |---|---|---|
 | 5 | Quote-derived SSVI surface and calibration diagnostics | Implemented; reuses milestone 4 snapshots, validation, and independent pricing |
 | 6 | Curves, actual-date schedules, and outstanding-note state | Native GBM/Heston dated API; optional offline snapshot bridge |
-| 7A | Dupire local-volatility pricing and model comparisons | Requires 5 and the curve/time-grid layer in 6 |
+| 7A | Dupire local-volatility pricing and model comparisons | Native smooth-surface evaluator and dated-context simulation; reuses 5–6 |
 | 7B | Heston QE-M simulation | Independent numerical branch; can proceed alongside 6 without waiting for 7A |
 | 8 | Portfolio valuation, scenarios, and explicit risk conventions | Requires 6; add model comparisons as 7 becomes available |
 | 9 | Correlated multi-asset GBM and worst-of Phoenix | Requires the dated cashflow layer in 6; integrate with the portfolio layer in 8 |
@@ -274,17 +274,31 @@ Milestone 6 acceptance is complete: 132 Rust tests (53 new dated tests), formatt
 
 ### 7A: Dupire local volatility
 
-Build a single-asset `LocalVolModel` from an accepted surface plus the milestone 6 curves and time grid. The surface describes European option marginals; a path-dependent price also requires a chosen model for dynamics. Model comparisons must record differences in vanilla fit as well as differences in dynamics.
+Build a single-asset `LocalVolModel` from an accepted surface plus the milestone 6 curves and time grid. The surface describes European option marginals; a path-dependent price also requires a chosen model for dynamics. Model comparisons record differences in vanilla fit as well as differences in dynamics. Implementation takes place on `feature/local-volatility`; the [Local Vol guide](local_volatility.md) documents the export, native API and declared extensions.
 
-Use the [original Dupire formulation](https://www.risk.net/sites/default/files/import_unmanaged/risk.net/data/Pay_per_view/risk/technical/1994/risk_0194_volatility.pdf). Local variance requires reliable time and strike derivatives and consistent carry. The current piecewise-linear display is unsuitable as the derivative input. Prepare a surface with suitable smoothness, explicit time-knot treatment, and validated short-time and wing extensions before path simulation.
+Use the [original Dupire formulation](https://www.risk.net/sites/default/files/import_unmanaged/risk.net/data/Pay_per_view/risk/technical/1994/risk_0194_volatility.pdf). Local variance requires reliable time and strike derivatives and consistent carry. The milestone 5 piecewise-linear surface stays unchanged. A separately versioned smooth export adds the origin and monotone C1 PCHIP ATM total variance, then uses the declared shifted skew `phi(theta) = eta / sqrt((theta + theta_floor) * (1 + theta))` globally. The positive total-variance floor defaults to 1% of the first ATM node. Its finite origin skew supports an analytic zero-time local-variance limit. Preserve full analytic SSVI wings and reject unsupported long-tenor queries; export vanilla changes are reported independently from the original fit's quote residuals.
 
-- [ ] Add a versioned surface export and a Rust evaluator with analytic derivatives where available; retain the Python calibration layer. Python/Rust evaluation of the same artifact must agree within fixed numerical tolerances.
-- [ ] Build a local-volatility grid or evaluator with explicit supported domain, interpolation rules, derivative tolerances, and short-time treatment. Record path excursions beyond the quote-supported region and the extension used. Materially negative local variance or unstable denominators reject the construction; any round-off handling is bounded and reported.
-- [ ] Implement log-stock simulation using the shared forward curve and payment discounting context. Require a complete validated extension over reachable positive spot states for simulation; derivative clipping or a hidden fallback to constant volatility cannot define the pricing model.
-- [ ] Add a Python `LocalVolModel` and support it through the new uncontrolled context-pricing interfaces. Existing GBM-specific controls, continuous-barrier weighting, and Greeks retain their explicit model restrictions until independently derived replacements are implemented.
-- [ ] Compare GBM, calibrated Heston, and Local Vol for European, barrier, Snowball, and Phoenix examples using the same valuation inputs and contractual monitoring. Report each model's vanilla residuals, sampling errors, grid changes, and structured-note price differences.
+- [x] Add a versioned surface export and a Rust evaluator with analytic derivatives where available; retain the Python calibration layer. Python/Rust evaluation of the same artifact must agree within fixed numerical tolerances.
+- [x] Build a local-volatility grid or evaluator with explicit supported domain, interpolation rules, derivative tolerances, and short-time treatment. Record path excursions beyond the quote-supported region and the extension used. Materially negative local variance or unstable denominators reject the construction; any round-off handling is bounded and reported.
+- [x] Implement log-stock simulation using the shared forward curve and payment discounting context. Require a complete validated extension over reachable positive spot states for simulation; derivative clipping or a hidden fallback to constant volatility cannot define the pricing model.
+- [x] Add a Python `LocalVolModel` and support it through the new uncontrolled context-pricing interfaces. Existing GBM-specific controls, continuous-barrier weighting, and Greeks retain their explicit model restrictions until independently derived replacements are implemented.
+- [x] Compare GBM, calibrated Heston, and Local Vol for European, barrier, Snowball, and Phoenix examples using the same valuation inputs and contractual monitoring. Report each model's vanilla residuals, sampling errors, grid changes, and structured-note price differences.
+
+The additive native Python interfaces are `LocalVolModel(artifact_json)`, `LocalVolModel.load(path)`, `price_european_context`, and `price_barrier_context`; dated Snowball/Phoenix calls also accept Local Vol. Rust provides `local_vol::LocalVolModel`, `try_price_local_vol_context` and a prepared `ContextPathGenerator`, preserving the existing GBM/Heston `Dynamics` enum and its `Copy` behaviour. The optional `export_local_vol` prepares a `SmoothLocalVolSurface` and export-change report. Serialisation preserves context carry and source identities and revalidates derived coefficients. Each native valuation returns path-evaluation exposure beyond observed moneyness/tenor coverage. A finite scan is a numerical diagnostic; the full-strike extension relies on the shifted SSVI analytic inequalities. No clipping or constant-volatility rescue defines a pricing model.
+
+Calendar theta remains GBM/Heston-only until a surface-roll convention is explicitly implemented. This milestone adds no Greeks, control expectations, continuous-barrier bridge weights, live data capture or automatic calendar adjustment.
 
 Acceptance: recover the constant-volatility GBM limit; verify the forward-stock expectation and non-negative local variance on supported test domains; reproduce independently evaluated surface vanilla prices across strikes/tenors using refined MC and an independent finite-difference/PDE reference. Declare price and grid tolerances per benchmark before evaluating results. A model-comparison notebook must identify extrapolation exposure and distinguish sampling error, discretisation error, calibration residual, and model assumptions.
+
+- [x] Complete the independent Python/Rust formula, derivative, origin, coefficient/hash and invalid-artifact checks.
+- [x] Complete forward-stock, constant-volatility, serial/parallel and explicit dated-monitoring regressions.
+- [x] Review independent PDE mesh refinement and native MC comparisons against smooth-surface Black references; retain predeclared tolerances and original quote residuals.
+- [x] Execute and inspect `notebooks/model_comparison.ipynb`, using saved LSEG curves/quotes and explicitly synthetic barrier/note terms.
+- [x] Complete Rust tests, formatting, default/Python-feature Clippy, offline market tests, native Python smoke checks and all seven notebook reruns. Include Local Vol smoke checks in endpoint builds and the Python 3.9–3.14 shared-wheel CI.
+
+Milestone 7A acceptance is complete on `feature/local-volatility`: 148 Rust tests, formatting, default/Python-feature all-targets Clippy with warnings denied, both Rust examples, and 101 offline market tests (21 new Local Vol tests) pass. The five native binding/extension/conditional/dated/Local Vol smoke scripts pass on CPython 3.12 and 3.14 using the same final `cp39-abi3` wheel. CI includes the new smoke script in its endpoint builds and Python 3.9–3.14 shared-wheel matrix; the intermediate interpreters were not all run locally.
+
+All seven notebooks execute in fresh Jupyter kernels with 37 code cells and 20 PNG outputs. A source-equality audit confirms the fresh outputs correspond to the final checked-in source, and all plots are visually inspected. The new model-comparison notebook also passes the kernel-free runner with seven code cells and four saved charts. Non-mutating fresh execution artifacts are saved under `artifacts/local-vol-notebooks`; fit/export reports and independent PDE/MC/model-comparison tables are saved under `artifacts/local_vol_model_comparison`. The [Local Vol guide](local_volatility.md) records the reviewed numerical errors, original quote residuals and explicit extension exposure. Existing interfaces, uniform-grid random streams, GBM/Heston calendar roll and `theta = dV/dT` remain compatible. Milestones 7B–9 remain planned.
 
 ### 7B: Heston QE-M
 
@@ -297,7 +311,7 @@ Add an optional quadratic-exponential scheme with martingale correction, followi
 
 Acceptance: bitwise serial/parallel reproducibility within each scheme; constant-variance/deterministic limits; valid variance states and both QE branches; no silent substitution on invalid moment conditions; statistically justified agreement with analytic references as grids refine. Preserve old full-truncation fixtures. Publish performance measurements without imposing noisy machine-specific timing thresholds in ordinary CI.
 
-- [ ] Extend the Heston notebook with scheme comparisons and add `notebooks/model_comparison.ipynb` for 7A. Run all existing notebooks after integrating model-selection changes.
+- [ ] Extend the Heston notebook with QE-M scheme comparisons and run all existing notebooks after integrating scheme selection. The separate `notebooks/model_comparison.ipynb` belongs to the 7A acceptance gate.
 
 ## Milestone 8: Portfolio valuation, scenarios, and risk conventions
 
@@ -357,9 +371,11 @@ cargo run --release --example advanced_pricing
 maturin develop --release
 python tests/test_bindings.py
 python tests/test_extensions.py
+python tests/test_conditional.py
 python tests/test_dated.py
+python tests/test_local_vol.py
 
-# Execute all six notebooks and save fresh outputs without changing source cells.
+# Execute all seven notebooks and save fresh outputs without changing source cells.
 python tools/run_notebooks.py --write
 # Restricted environments can use: python tools/run_notebooks.py --kernel-free --write
 ```
