@@ -1,0 +1,117 @@
+{
+  "artifact_sha256": "21528c9a11757a060fdece58e352a4edcabadc7f1031c9279f465bbf96b6b41d",
+  "as_of": "2026-01-01",
+  "asset": "INDEX",
+  "coefficients": [
+    {
+      "a": 0.0,
+      "b": 0.009863013698630137,
+      "c": 0.000248912424112218,
+      "d": -5.7148260638011095e-06
+    },
+    {
+      "a": 0.010106211296678552,
+      "b": 0.010343694068663164,
+      "c": 0.00018143357409488442,
+      "d": 6.747885001732665e-05
+    },
+    {
+      "a": 0.02069881778945393,
+      "b": 0.022424050965304566,
+      "c": 0.0007266775777414192,
+      "d": 0.00015045366750010558
+    }
+  ],
+  "coverage": [
+    {
+      "k": -0.3,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": -0.3,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": -0.3,
+      "t": 1.0
+    },
+    {
+      "k": 0.3,
+      "t": 0.2465753424657534
+    },
+    {
+      "k": 0.3,
+      "t": 0.4931506849315068
+    },
+    {
+      "k": 0.3,
+      "t": 1.0
+    }
+  ],
+  "currency": "USD",
+  "curves": [
+    {
+      "date": "2026-01-01",
+      "discount_factor": 1.0,
+      "forward": 100.0,
+      "source": "synthetic reference discount | synthetic reference forward"
+    },
+    {
+      "date": "2026-04-01",
+      "discount_factor": 0.9926300321180352,
+      "forward": 100.24687958947796,
+      "source": "synthetic reference discount | synthetic reference forward"
+    },
+    {
+      "date": "2026-06-30",
+      "discount_factor": 0.9853143806626516,
+      "forward": 100.49436867427292,
+      "source": "synthetic reference discount | synthetic reference forward"
+    },
+    {
+      "date": "2027-01-01",
+      "discount_factor": 0.9704455335485082,
+      "forward": 101.00501670841679,
+      "source": "synthetic reference discount | synthetic reference forward"
+    }
+  ],
+  "epsilon": 1e-06,
+  "eta": 0.8,
+  "fit_status": "accepted",
+  "interpolation": "pchip_theta_c1",
+  "min_denominator": 1e-10,
+  "model": "regularized_ssvi_local_vol",
+  "nodes": [
+    {
+      "t": 0.0,
+      "tangent": 0.04,
+      "theta": 0.0
+    },
+    {
+      "t": 0.2465753424657534,
+      "tangent": 0.04194942594513395,
+      "theta": 0.010106211296678552
+    },
+    {
+      "t": 0.4931506849315068,
+      "tangent": 0.04424204649911441,
+      "theta": 0.02069881778945393
+    },
+    {
+      "t": 1.0,
+      "tangent": 0.04800000000000002,
+      "theta": 0.044000000000000004
+    }
+  ],
+  "rho": -0.4,
+  "schema_version": 1,
+  "short_time": "global_shifted_phi",
+  "source_curve_sha256": "69b23a513bcf950968b8edf43366dbdaa2b584a625efec892c8494514e0fa776",
+  "source_dataset_sha256": "177eb22efe2e291dbb8f681b603e88d4bd7df4d892d2fb0986e28c8ef16494fe",
+  "source_fit_status": "synthetic_reference",
+  "source_surface_sha256": "afea7368bf12be3f47915a0be41f3bcac1ffc291a2db164cbe8b57a75ed8e552",
+  "spot": 100.0,
+  "theta_floor": 0.00010106211296678552,
+  "time_domain": "bounded_no_long_extrapolation",
+  "wings": "analytic_ssvi_all_real_k"
+}

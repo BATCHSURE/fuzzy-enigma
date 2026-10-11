@@ -325,6 +325,11 @@ class VolSurface:
         write_json(path, self.to_dict())
         return path
 
+    def export_local_vol(self, **settings):
+        """Create a separate smooth pricing artifact; preserve this surface."""
+        from .local_vol import export_local_vol
+        return export_local_vol(self, **settings)
+
     def diagnostics(self):
         times = sorted({node["t"] for node in self._nodes} | {
             (a["t"] + b["t"]) / 2 for a, b in zip(self._nodes, self._nodes[1:])})

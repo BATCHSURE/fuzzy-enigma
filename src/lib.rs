@@ -20,6 +20,7 @@ pub mod analytic;
 pub mod dated;
 pub mod error;
 pub mod greeks;
+pub mod local_vol;
 pub mod model;
 pub mod numerical;
 pub mod payoff;

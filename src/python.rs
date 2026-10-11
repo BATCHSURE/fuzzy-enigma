@@ -847,6 +847,68 @@ impl PyMcEngine {
         )
     }
 
+    /// European cashflow priced with the dated carry and dynamics.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (context, dynamics, option_type, strike, expiry, *, payment_date = None, grid = None))]
+    fn price_european_context(
+        &self,
+        py: Python<'_>,
+        context: PyRef<'_, dated_bindings::PyContext>,
+        dynamics: Option<&Bound<'_, PyAny>>,
+        option_type: &str,
+        strike: f64,
+        expiry: &Bound<'_, PyAny>,
+        payment_date: Option<&Bound<'_, PyAny>>,
+        grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+    ) -> PyResult<dated_bindings::PyDatedResult> {
+        dated_bindings::price_european_context(
+            py,
+            &self.inner,
+            &context,
+            dynamics,
+            option_type,
+            strike,
+            expiry,
+            payment_date,
+            grid.as_deref(),
+        )
+    }
+
+    /// Barrier monitoring uses only the explicitly supplied contractual dates.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (context, dynamics, option_type, strike, expiry, barrier_kind, barrier, monitoring_dates, *, rebate = 0.0, payment_date = None, grid = None))]
+    fn price_barrier_context(
+        &self,
+        py: Python<'_>,
+        context: PyRef<'_, dated_bindings::PyContext>,
+        dynamics: Option<&Bound<'_, PyAny>>,
+        option_type: &str,
+        strike: f64,
+        expiry: &Bound<'_, PyAny>,
+        barrier_kind: &str,
+        barrier: f64,
+        monitoring_dates: &Bound<'_, PyAny>,
+        rebate: f64,
+        payment_date: Option<&Bound<'_, PyAny>>,
+        grid: Option<PyRef<'_, dated_bindings::PyGrid>>,
+    ) -> PyResult<dated_bindings::PyDatedResult> {
+        dated_bindings::price_barrier_context(
+            py,
+            &self.inner,
+            &context,
+            dynamics,
+            option_type,
+            strike,
+            expiry,
+            barrier_kind,
+            barrier,
+            monitoring_dates,
+            rebate,
+            payment_date,
+            grid.as_deref(),
+        )
+    }
+
     /// Frozen-spot calendar roll with explicit fixing and payment updates.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (contract, context, dynamics, state, roll_date = None, *, fixings = None,

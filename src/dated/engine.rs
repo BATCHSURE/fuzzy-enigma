@@ -4,9 +4,11 @@ use super::{
     canonical_identity, float_identity, nonempty, number, year_fraction, ContextPricingError, Date,
     TimeGrid, ValuationContext, ValuationCutoff,
 };
+use crate::local_vol::LocalVolModel;
 use crate::model::{GbmModel, HestonModel};
 use crate::pricer::{summarise, McEngine, PriceResult};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CashflowKind {
@@ -121,7 +123,7 @@ pub enum Dynamics {
 }
 impl Dynamics {
     pub fn validate(&self) -> Result<(), ContextPricingError> {
-        match *self {
+        match self {
             Self::Gbm(model) => {
                 GbmDynamics::try_new(model.volatility)?;
             }
@@ -145,7 +147,7 @@ impl Dynamics {
     }
     pub fn identity(&self) -> String {
         let mut parts = vec!["dated_dynamics_v1".into()];
-        match *self {
+        match self {
             Self::Gbm(model) => {
                 parts.push("gbm_exact_log".into());
                 parts.push(float_identity(model.volatility));
@@ -174,6 +176,36 @@ impl Dynamics {
     }
 }
 
+/// Counts refer to actual paths (including both antithetic members), never
+/// independent Monte Carlo sample units. The quote hull is observational;
+/// excursions use the explicitly declared full-domain model extension.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathDiagnostics {
+    pub evaluations: usize,
+    pub outside_observed_evaluations: usize,
+    pub wing_evaluations: usize,
+    pub short_time_evaluations: usize,
+    pub paths_with_extensions: usize,
+    pub minimum_k: Option<f64>,
+    pub maximum_k: Option<f64>,
+    pub extension_policy: String,
+}
+impl PathDiagnostics {
+    fn merge(&mut self, other: Self) {
+        self.evaluations += other.evaluations;
+        self.outside_observed_evaluations += other.outside_observed_evaluations;
+        self.wing_evaluations += other.wing_evaluations;
+        self.short_time_evaluations += other.short_time_evaluations;
+        self.paths_with_extensions += other.paths_with_extensions;
+        if let Some(k) = other.minimum_k {
+            self.minimum_k = Some(self.minimum_k.map_or(k, |old| old.min(k)));
+        }
+        if let Some(k) = other.maximum_k {
+            self.maximum_k = Some(self.maximum_k.map_or(k, |old| old.max(k)));
+        }
+    }
+}
+
 pub trait ContextPathGenerator: Send + Sync {
     fn grid(&self) -> &TimeGrid;
     fn noise_dim(&self) -> usize;
@@ -190,6 +222,13 @@ pub trait ContextPathGenerator: Send + Sync {
     }
     fn validate(&self, context: &ValuationContext) -> Result<(), ContextPricingError> {
         validate_generator_context(context, self.grid())
+    }
+    /// Pure per-path observation, aggregated by the engine without shared state.
+    fn path_diagnostics(
+        &self,
+        _path: &[f64],
+    ) -> Result<Option<PathDiagnostics>, ContextPricingError> {
+        Ok(None)
     }
 }
 
@@ -220,8 +259,10 @@ pub struct CurvePathGenerator {
     grid: TimeGrid,
     spot: f64,
     dynamics: Dynamics,
+    local_vol: Option<Arc<LocalVolModel>>,
     dt: Vec<f64>,
     carry: Vec<f64>,
+    forward_logs: Vec<f64>,
     heston: Option<HestonModel>,
     noise_dim: usize,
     context_identity: String,
@@ -264,7 +305,7 @@ impl CurvePathGenerator {
             .steps()
             .checked_mul(dynamics.factors())
             .ok_or_else(|| ContextPricingError::invalid("noise_dim", "overflows"))?;
-        let heston = match dynamics {
+        let heston = match &dynamics {
             Dynamics::Gbm(_) => None,
             Dynamics::Heston(model) => Some(
                 HestonModel::try_new(
@@ -286,12 +327,25 @@ impl CurvePathGenerator {
             grid: context.grid.clone(),
             spot: context.spot,
             dynamics,
+            local_vol: None,
             dt,
             carry,
+            forward_logs: logs,
             heston,
             noise_dim,
             context_identity: context.identity(),
         })
+    }
+    /// Additive Local Vol constructor; the original Copy Dynamics enum and
+    /// its GBM/Heston constructor remain source-compatible.
+    pub fn try_new_local_vol(
+        context: &ValuationContext,
+        model: Arc<LocalVolModel>,
+    ) -> Result<Self, ContextPricingError> {
+        model.validate_context(context)?;
+        let mut generator = Self::try_new(context, Dynamics::Gbm(GbmDynamics { volatility: 0.0 }))?;
+        generator.local_vol = Some(model);
+        Ok(generator)
     }
     fn generate_with<F>(&self, out: &mut [f64], normal: F) -> Result<(), ContextPricingError>
     where
@@ -304,34 +358,40 @@ impl CurvePathGenerator {
             ));
         }
         out[0] = self.spot;
-        let mut raw = match self.dynamics {
+        let mut raw = match &self.dynamics {
             Dynamics::Heston(model) => model.initial_variance,
             _ => 0.0,
         };
         for i in 0..self.grid.steps() {
             let dt = self.dt[i];
-            let increment = match self.dynamics {
-                Dynamics::Gbm(model) => {
-                    self.carry[i] - 0.5 * model.volatility * model.volatility * dt
-                        + model.volatility * dt.sqrt() * normal(i)
-                }
-                Dynamics::Heston(model) => {
-                    let stock = normal(2 * i);
-                    let variance = model.rho * stock
-                        + (1.0 - model.rho * model.rho).max(0.0).sqrt() * normal(2 * i + 1);
-                    let (positive, diffusion, next) = self
-                        .heston
-                        .as_ref()
-                        .expect("prepared Heston")
-                        .variance_step(raw, dt, variance);
-                    raw = next;
-                    if !raw.is_finite() {
-                        return Err(ContextPricingError::invalid(
-                            "variance_path",
-                            "non-finite raw variance",
-                        ));
+            let increment = if let Some(model) = &self.local_vol {
+                let k = out[i].ln() - self.forward_logs[i];
+                let variance = model.local_variance(k, self.grid.times()[i])?;
+                self.carry[i] - 0.5 * variance * dt + (variance * dt).sqrt() * normal(i)
+            } else {
+                match &self.dynamics {
+                    Dynamics::Gbm(model) => {
+                        self.carry[i] - 0.5 * model.volatility * model.volatility * dt
+                            + model.volatility * dt.sqrt() * normal(i)
                     }
-                    self.carry[i] - 0.5 * positive * dt + diffusion * stock
+                    Dynamics::Heston(model) => {
+                        let stock = normal(2 * i);
+                        let variance = model.rho * stock
+                            + (1.0 - model.rho * model.rho).max(0.0).sqrt() * normal(2 * i + 1);
+                        let (positive, diffusion, next) = self
+                            .heston
+                            .as_ref()
+                            .expect("prepared Heston")
+                            .variance_step(raw, dt, variance);
+                        raw = next;
+                        if !raw.is_finite() {
+                            return Err(ContextPricingError::invalid(
+                                "variance_path",
+                                "non-finite raw variance",
+                            ));
+                        }
+                        self.carry[i] - 0.5 * positive * dt + diffusion * stock
+                    }
                 }
             };
             out[i + 1] = out[i] * increment.exp();
@@ -366,7 +426,15 @@ impl ContextPathGenerator for CurvePathGenerator {
         self.noise_dim
     }
     fn identity(&self) -> String {
-        self.dynamics.identity()
+        if let Some(model) = &self.local_vol {
+            canonical_identity(&[
+                "dated_dynamics_v1".into(),
+                "dupire_left_point_log_euler".into(),
+                model.identity(),
+            ])
+        } else {
+            self.dynamics.identity()
+        }
     }
     fn validate(&self, context: &ValuationContext) -> Result<(), ContextPricingError> {
         validate_generator_context(context, &self.grid)?;
@@ -386,6 +454,44 @@ impl ContextPathGenerator for CurvePathGenerator {
             ));
         }
         self.generate_with(out, |i| normals[i])
+    }
+    fn path_diagnostics(
+        &self,
+        path: &[f64],
+    ) -> Result<Option<PathDiagnostics>, ContextPricingError> {
+        let Some(model) = &self.local_vol else {
+            return Ok(None);
+        };
+        if path.len() != self.grid.steps() + 1 {
+            return Err(ContextPricingError::invalid(
+                "path_diagnostics",
+                "path length differs from grid",
+            ));
+        }
+        let mut d = PathDiagnostics {
+            evaluations: self.grid.steps(),
+            outside_observed_evaluations: 0,
+            wing_evaluations: 0,
+            short_time_evaluations: 0,
+            paths_with_extensions: 0,
+            minimum_k: None,
+            maximum_k: None,
+            extension_policy: model.extension_policy(),
+        };
+        for (i, &spot) in path[..self.grid.steps()].iter().enumerate() {
+            number(spot, "diagnostic_stock", true)?;
+            let k = spot.ln() - self.forward_logs[i];
+            let t = self.grid.times()[i];
+            let outside = !model.observed(k, t);
+            let short = t < model.first_quote_time();
+            d.outside_observed_evaluations += usize::from(outside);
+            d.short_time_evaluations += usize::from(short);
+            d.wing_evaluations += usize::from(outside && !short);
+            d.minimum_k = Some(d.minimum_k.map_or(k, |v| v.min(k)));
+            d.maximum_k = Some(d.maximum_k.map_or(k, |v| v.max(k)));
+        }
+        d.paths_with_extensions = usize::from(d.outside_observed_evaluations > 0);
+        Ok(Some(d))
     }
 }
 
@@ -420,6 +526,7 @@ pub struct DatedPriceResult {
     pub grid_identity: String,
     /// Actual stock paths: antithetic budgets are rounded up to an even count.
     pub paths: usize,
+    pub path_diagnostics: Option<PathDiagnostics>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -598,6 +705,7 @@ fn result<P: CashflowPayoff + ?Sized>(
         },
         grid_identity: context.grid.identity(),
         paths: if deterministic { 0 } else { paths },
+        path_diagnostics: None,
     })
 }
 
@@ -630,6 +738,21 @@ fn validate_path(path: &[f64], context: &ValuationContext) -> Result<(), Context
 }
 
 impl McEngine {
+    /// Uncontrolled local-volatility context pricing. Deterministic remaining
+    /// receivables keep the same no-path/no-positive-tenor behaviour as legacy
+    /// dated pricing; active fixing risk uses the validated smooth model.
+    pub fn try_price_local_vol_context<P: CashflowPayoff + ?Sized>(
+        &self,
+        context: &ValuationContext,
+        model: &LocalVolModel,
+        payoff: &P,
+    ) -> Result<DatedPriceResult, ContextPricingError> {
+        if !payoff.requires_simulation() || context.grid.steps() == 0 {
+            return self.try_price_context(context, None, payoff);
+        }
+        let generator = model.prepare(context)?;
+        self.try_price_context_with_generator(context, &generator, payoff)
+    }
     pub fn try_price_context<P: CashflowPayoff + ?Sized>(
         &self,
         context: &ValuationContext,
@@ -704,22 +827,44 @@ impl McEngine {
                 generator.generate(normals, path)?;
                 validate_path(path, context)?;
                 let first = evaluate(payoff, context, path)?;
+                let mut diagnostics = generator.path_diagnostics(path)?;
                 if self.antithetic {
                     for z in normals.iter_mut() {
                         *z = -*z;
                     }
                     generator.generate(normals, path)?;
                     validate_path(path, context)?;
-                    Ok(pair(first, evaluate(payoff, context, path)?))
+                    if let Some(second) = generator.path_diagnostics(path)? {
+                        if let Some(d) = diagnostics.as_mut() {
+                            d.merge(second);
+                        } else {
+                            diagnostics = Some(second);
+                        }
+                    }
+                    Ok((pair(first, evaluate(payoff, context, path)?), diagnostics))
                 } else {
-                    Ok(first)
+                    Ok((first, diagnostics))
                 }
             },
         );
-        let samples = outcomes
+        let outcomes = outcomes
             .into_iter()
             .collect::<Result<Vec<_>, ContextPricingError>>()?;
-        result(
+        let mut diagnostics: Option<PathDiagnostics> = None;
+        let samples: Vec<_> = outcomes
+            .into_iter()
+            .map(|(sample, d)| {
+                if let Some(d) = d {
+                    if let Some(all) = diagnostics.as_mut() {
+                        all.merge(d);
+                    } else {
+                        diagnostics = Some(d);
+                    }
+                }
+                sample
+            })
+            .collect();
+        let mut priced = result(
             context,
             payoff,
             Some(generator.identity()),
@@ -727,7 +872,9 @@ impl McEngine {
             known,
             false,
             if self.antithetic { 2 * n } else { n },
-        )
+        )?;
+        priced.path_diagnostics = diagnostics;
+        Ok(priced)
     }
 
     pub fn try_calendar_theta<P: CashflowPayoff + ?Sized, Q: CashflowPayoff + ?Sized>(

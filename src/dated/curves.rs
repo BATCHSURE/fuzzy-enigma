@@ -320,6 +320,12 @@ impl TimeGrid {
         self.max_step_days
     }
     pub fn index(&self, date: Date) -> Result<usize, ContextPricingError> {
+        // The valuation-date stock is always the zero-time anchor. It can be
+        // an explicitly monitored inception barrier even when future fixing
+        // metadata contains only strictly later observations.
+        if date == self.as_of {
+            return Ok(0);
+        }
         self.fixing_dates
             .binary_search(&date)
             .map(|i| self.fixing_indices[i])

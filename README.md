@@ -21,6 +21,10 @@ and Phoenix contracts with actual-date schedules, term-structure curves,
 historical state and explicit settlement records. The
 [outstanding-note notebook](notebooks/outstanding_notes.ipynb) combines saved
 market curves with clearly labelled synthetic teaching histories.
+The [Local Vol module](docs/local_volatility.md) derives Dupire dynamics from
+an explicitly smoothed, versioned SSVI export. Its
+[model comparison notebook](notebooks/model_comparison.ipynb) compares GBM,
+calibrated Heston and Local Vol on the same dated curves and contracts.
 
 ## Features
 
@@ -28,6 +32,8 @@ market curves with clearly labelled synthetic teaching histories.
   exactly with the log-Euler scheme.
 - **Heston stochastic volatility** with log-Euler stock dynamics and
   full-truncation Euler variance, using two noise factors per step.
+- **Dupire local volatility** with a native analytic SSVI evaluator, explicit
+  short-time/model-wing extensions and path-exposure diagnostics.
 - **Path-dependent payoffs** out of the box:
   - European (sanity check vs. Black-Scholes)
   - Arithmetic-average **Asian**
@@ -239,7 +245,9 @@ ends of the supported interpreter range:
 ```sh
 python tests/test_bindings.py
 python tests/test_extensions.py
+python tests/test_conditional.py
 python tests/test_dated.py
+python tests/test_local_vol.py
 ```
 
 The dated smoke test covers historical knock-in/memory, pending and partial
@@ -365,6 +373,25 @@ keep their schedule-scaled `dV/dT` convention. See the
 [dated-note guide](docs/dated_notes.md) for constructors, cutoff/event ordering,
 settlement and roll conventions, and the offline snapshot bridge.
 
+### Surface-driven local volatility
+
+`LocalVolModel` loads an independently versioned smooth surface artifact and
+uses the same dated `ValuationContext` as `GbmDynamics` and `HestonDynamics`.
+The new `price_european_context` and `price_barrier_context` methods accept all
+three models; dated Snowball/Phoenix methods also accept Local Vol. Barrier
+and note monitoring dates remain contractual observations when refining the
+simulation grid.
+
+The optional `export_local_vol` tool keeps the existing piecewise-linear
+`VolSurface` unchanged. It records its monotone C1 time interpolation,
+short-time regularisation, full analytic wings, source hashes and the effect
+on vanilla prices. Simulation reports excursions beyond observed quote
+coverage. GBM controls, continuous bridge pricing and legacy Greeks retain
+their model restrictions. Local Vol calendar roll requires a surface-roll
+policy and remains unavailable in this milestone. See the
+[Local Vol guide](docs/local_volatility.md) for the artifact, independent PDE
+benchmarks and pricing conventions.
+
 ## Optional market tools
 
 Use Python 3.12 and the optional `market` extra for the SPXW workflow.
@@ -410,9 +437,10 @@ evidence when the account has the required content permission.
 
 ## Caveats
 
-- Barrier monitoring is **discrete on the simulation grid**. For a
-  continuously-monitored GBM contract, use `price_continuous_barrier`.
-  Structured note knock-in remains contractually discrete.
+- Legacy barriers monitor the simulation grid. Dated context barriers and
+  notes monitor their explicit contract dates, which numerical refinement
+  preserves. For a continuously monitored GBM contract, use
+  `price_continuous_barrier`.
 - Greeks are finite-difference estimates. Pathwise and likelihood-ratio
   estimators converge better for the payoffs that admit them, but they need
   per-payoff derivative information, whereas bumping works on any `Payoff`
